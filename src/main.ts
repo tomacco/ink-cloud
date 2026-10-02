@@ -193,10 +193,26 @@ function adapt(dt: number): void {
 // ---------------------------------------------------------------------------
 // Camera: slow orbit with gentle drift, always looking at the core.
 const camPos = new THREE.Vector3();
-function updateCamera(t: number): number {
-  const az = t * params.orbitSpeed;
-  const el = 0.25 * Math.sin(t * 0.071) * (0.4 + params.camDrift);
-  const dist = params.camDistance + params.camDrift * 0.5 * Math.sin(t * 0.043);
+// The user's own orbit and zoom sit on top of the automatic drift. Gestures
+// write targets; the camera eases toward them so it feels connected but calm.
+// The mapping from pixels to angle is constant: it never changes with zoom.
+const ORBIT_RAD_PER_PX = 0.006;
+const ZOOM_MIN = 1.6;
+const ZOOM_MAX = 8;
+let userAz = 0;
+let userEl = 0;
+let targetAz = 0;
+let targetEl = 0;
+let zoom = params.camDistance;
+
+function updateCamera(t: number, dt: number): number {
+  const k = Math.min(1, dt * 10);
+  userAz += (targetAz - userAz) * k;
+  userEl += (targetEl - userEl) * k;
+  zoom += (params.camDistance - zoom) * k;
+  const az = t * params.orbitSpeed + userAz;
+  const el = 0.25 * Math.sin(t * 0.071) * (0.4 + params.camDrift) + userEl;
+  const dist = zoom + params.camDrift * 0.5 * Math.sin(t * 0.043);
   camPos.set(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el)).multiplyScalar(dist);
   camera.position.copy(camPos);
   camera.lookAt(0, 0, 0);
@@ -204,10 +220,20 @@ function updateCamera(t: number): number {
   return dist;
 }
 
+function orbitBy(dxPx: number, dyPx: number): void {
+  targetAz += dxPx * ORBIT_RAD_PER_PX;
+  targetEl = Math.max(-1.3, Math.min(1.3, targetEl - dyPx * ORBIT_RAD_PER_PX));
+}
+
+function zoomBy(factor: number): void {
+  params.camDistance = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, params.camDistance * factor));
+}
+
 // ---------------------------------------------------------------------------
-// Press and hold: the finger projects onto the plane through the core that
-// faces the camera; ink is pulled there while pressing, and the controls
-// appear once the press has lasted `touchHold` seconds.
+// Gestures. One finger: the ink follows it (press and hold; the controls
+// appear after `touchHold` seconds). Two fingers: pinch zooms, dragging both
+// orbits. Mouse: wheel or trackpad scroll zooms, horizontal scroll orbits,
+// right-drag orbits. The first gesture also starts the prepared stream.
 const touch = new THREE.Vector4(0, 0, 0, 0);
 const raycaster = new THREE.Raycaster();
 const touchPlane = new THREE.Plane();
@@ -218,7 +244,15 @@ let pressing = false;
 let pressStart = 0;
 let pressX = 0;
 let pressY = 0;
-let pressId = -1; // the pointer that owns the press; other fingers are ignored
+let pressId = -1; // the pointer that owns the press
+const pointers = new Map<number, { x: number; y: number }>();
+let gesture: 'none' | 'pinch' | 'orbit' = 'none';
+let pinchDist = 0;
+let pinchCx = 0;
+let pinchCy = 0;
+let orbitLastX = 0;
+let orbitLastY = 0;
+let armedStream = false;
 
 function projectTouch(): void {
   ndc.set((pressX / window.innerWidth) * 2 - 1, -(pressY / window.innerHeight) * 2 + 1);
@@ -228,31 +262,114 @@ function projectTouch(): void {
   if (raycaster.ray.intersectPlane(touchPlane, hitPoint)) touch.set(hitPoint.x, hitPoint.y, hitPoint.z, touch.w);
 }
 
+function firstTwo(): [{ x: number; y: number }, { x: number; y: number }] | null {
+  if (pointers.size < 2) return null;
+  const it = pointers.values();
+  return [it.next().value!, it.next().value!];
+}
+
+function beginPinch(): void {
+  const pair = firstTwo();
+  if (!pair) return;
+  pressing = false; // the second finger turns the press into a camera gesture
+  pressId = -1;
+  gesture = 'pinch';
+  pinchDist = Math.hypot(pair[1].x - pair[0].x, pair[1].y - pair[0].y);
+  pinchCx = (pair[0].x + pair[1].x) / 2;
+  pinchCy = (pair[0].y + pair[1].y) / 2;
+}
+
 canvas.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0 && e.pointerType === 'mouse') return;
-  if (pressing) return; // a second finger must not restart the hold or move the attractor
+  try {
+    canvas.setPointerCapture(e.pointerId);
+  } catch {
+    /* synthetic pointer in tests */
+  }
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (armedStream) {
+    armedStream = false;
+    audio.startPrepared(); // inside the gesture: browsers allow it here
+  } else void audio.resume();
+  if (e.pointerType === 'mouse' && e.button === 2) {
+    gesture = 'orbit';
+    orbitLastX = e.clientX;
+    orbitLastY = e.clientY;
+    return;
+  }
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (pointers.size >= 2) {
+    beginPinch();
+    return;
+  }
+  if (gesture !== 'none' || pressing) return;
   pressId = e.pointerId;
   pressing = true;
   pressStart = elapsed;
   pressX = e.clientX;
   pressY = e.clientY;
-  canvas.setPointerCapture(e.pointerId);
-  void audio.resume(); // first gesture unlocks the AudioContext for later
 });
 canvas.addEventListener('pointermove', (e) => {
-  if (!pressing || e.pointerId !== pressId) return;
-  pressX = e.clientX;
-  pressY = e.clientY;
+  const p = pointers.get(e.pointerId);
+  if (p) {
+    p.x = e.clientX;
+    p.y = e.clientY;
+  }
+  if (gesture === 'pinch') {
+    const pair = firstTwo();
+    if (!pair) return;
+    const d = Math.hypot(pair[1].x - pair[0].x, pair[1].y - pair[0].y);
+    const cx = (pair[0].x + pair[1].x) / 2;
+    const cy = (pair[0].y + pair[1].y) / 2;
+    if (pinchDist > 1 && d > 1) zoomBy(pinchDist / d);
+    orbitBy(cx - pinchCx, cy - pinchCy);
+    pinchDist = d;
+    pinchCx = cx;
+    pinchCy = cy;
+    return;
+  }
+  if (gesture === 'orbit') {
+    orbitBy(e.clientX - orbitLastX, e.clientY - orbitLastY);
+    orbitLastX = e.clientX;
+    orbitLastY = e.clientY;
+    return;
+  }
+  if (pressing && e.pointerId === pressId) {
+    pressX = e.clientX;
+    pressY = e.clientY;
+  }
 });
 const release = (e: PointerEvent): void => {
-  if (e.pointerId !== pressId) return;
-  pressing = false;
-  pressId = -1;
+  pointers.delete(e.pointerId);
+  if (gesture === 'pinch' && pointers.size < 2) gesture = 'none'; // the remaining finger does not become a press
+  if (gesture === 'orbit' && pointers.size === 0) gesture = 'none';
+  if (e.pointerId === pressId) {
+    pressing = false;
+    pressId = -1;
+  }
 };
 canvas.addEventListener('pointerup', release);
 canvas.addEventListener('pointercancel', release);
 canvas.addEventListener('lostpointercapture', release);
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener(
+  'wheel',
+  (e) => {
+    e.preventDefault();
+    if (e.ctrlKey) zoomBy(Math.exp(e.deltaY * 0.004)); // trackpad pinch arrives as ctrl+wheel
+    else if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) orbitBy(e.deltaX * 0.6, 0);
+    else zoomBy(Math.exp(e.deltaY * 0.0015));
+  },
+  { passive: false }
+);
 
+if (query.has('tap')) {
+  // Test hook: a synthetic tap after 1.5 s (needs an autoplay-permitted browser to start sound).
+  setTimeout(() => {
+    const ev = new PointerEvent('pointerdown', { pointerId: 99, clientX: 40, clientY: 40, button: 0, pointerType: 'mouse', bubbles: true });
+    canvas.dispatchEvent(ev);
+    canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 99, clientX: 40, clientY: 40, button: 0, pointerType: 'mouse', bubbles: true }));
+  }, 1500);
+}
 if (query.has('touch')) {
   const [fx, fy] = (query.get('touch') || '0.5,0.5').split(',').map(Number);
   pressX = fx * window.innerWidth;
@@ -381,7 +498,7 @@ function frame(now: number): void {
   params.detailStrength = baseDetail * (1 + params.audioDetail * a.high);
 
   // --- simulate + render
-  const dist = updateCamera(elapsed);
+  const dist = updateCamera(elapsed, dt);
   updateTouch(dt);
   renderer.info.reset();
   gpuTimer?.poll();
@@ -405,6 +522,7 @@ function frame(now: number): void {
     fpsAccum = 0;
   }
   overlay.setBeat(env, elapsed - lastBeatAt < 0.08);
+  overlay.setLoading(audio.buffering);
   adapt(dt);
 
   if (bench) {
@@ -449,5 +567,13 @@ if (query.get('autostart') === 'stream') {
     },
     (err: unknown) => report(`AUTOSTART_STREAM failed: ${String(err)}`)
   );
+} else if (query.get('source') !== 'silent') {
+  // Default: the stream buffers from the first moment and the first tap plays it.
+  audio.prepareStream(query.get('url') || DEFAULT_STREAM);
+  armedStream = true;
+  stats.source = audio.kind;
+  overlay.setPlaying(audio);
+} else {
+  overlay.setHint('press and hold');
 }
 if (params.manualBpm) clock.sync(elapsed);

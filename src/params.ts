@@ -20,7 +20,7 @@ export const params = {
   emitterDrift: 0.05, // slow wandering of the emitters
 
   // --- motion -----------------------------------------------------------
-  noiseScale: 0.9,
+  noiseScale: 2.45,
   noiseSpeed: 0.03,
   noiseStrength: 0.2,
   detailScale: 14.0, // high-frequency octave for the core (keep its strength tiny: it stretches lines)
