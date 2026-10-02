@@ -318,7 +318,7 @@ export class ParticleSim {
     u.uStringSpeed.value = p.stringSpeed;
     u.uStringDrift.value = p.stringDrift;
     u.uStringSpring.value = p.stringSpring;
-    u.uLinesPerSurface.value = p.linesPerSurface;
+    u.uLinesPerSurface.value = Math.max(1, p.linesPerSurface);
     this.time += dt;
     u.uTime.value = this.time;
     u.uDt.value = dt;

@@ -87,7 +87,7 @@ export class Overlay {
         e.preventDefault();
         handlers.onTogglePlay();
       }
-      if (e.key === 'm' || e.key === 'M') handlers.onToggleMode();
+      if ((e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey && !e.altKey && this.gate.hidden) handlers.onToggleMode();
       if (e.key === 'Escape') {
         if (!this.gate.hidden) this.gate.hidden = true;
         else if (this.hidden) this.setHidden(false);

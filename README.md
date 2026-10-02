@@ -24,7 +24,7 @@
   <img src="docs/strings-mode.jpg" width="640" alt="Strings mode: families of straight lines sweeping between base curves, stacking into dark edges">
 </p>
 
-**Ink** is the free cloud above. **Strings** (the grid button, or `M`) is the construction behind the *Lumen Chamber* cover: ruled surfaces. Eight base vertices sit on a jittered cube; a curve is a Bézier through three of them, or a single vertex. A surface pairs two curves and its strings join the points at the same parameter on both, sweeping along slowly. Where both curves collapse to a vertex every string stacks into one dark base edge; a curve paired with a vertex fans into a point. Particles spring onto their string, so the beat, the touch and the flow still move them and the surfaces breathe. Switching modes morphs one into the other.
+**Ink** is the free cloud above. **Strings** (the grid button, or `M`) is the construction behind the *Lumen Chamber* cover: ruled surfaces. Eight base vertices sit on a jittered cube; a curve is a quadratic Bézier between two of them with a third as control point, or a single vertex. A surface pairs two curves and its strings join the points at the same parameter on both, sweeping along slowly. Where both curves collapse to a vertex every string stacks into one dark base edge; a curve paired with a vertex fans into a point. Particles spring onto their string, so the beat, the touch and the flow still move them and the surfaces breathe. Switching ink to strings morphs: particles spring onto their strings. Switching back dissolves instead: strings drift off with the flow and re-emerge from the core over a few seconds.
 
 ## Sound
 
