@@ -253,6 +253,8 @@ let pinchCy = 0;
 let orbitLastX = 0;
 let orbitLastY = 0;
 let armedStream = false;
+let bufferingFor = 0;
+let flowingFor = 0;
 
 function projectTouch(): void {
   ndc.set((pressX / window.innerWidth) * 2 - 1, -(pressY / window.innerHeight) * 2 + 1);
@@ -289,6 +291,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (armedStream) {
     armedStream = false;
     audio.startPrepared(); // inside the gesture: browsers allow it here
+    overlay.setHint('press and hold for controls');
   } else void audio.resume();
   if (e.pointerType === 'mouse' && e.button === 2) {
     gesture = 'orbit';
@@ -355,9 +358,12 @@ canvas.addEventListener(
   'wheel',
   (e) => {
     e.preventDefault();
-    if (e.ctrlKey) zoomBy(Math.exp(e.deltaY * 0.004)); // trackpad pinch arrives as ctrl+wheel
-    else if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) orbitBy(e.deltaX * 0.6, 0);
-    else zoomBy(Math.exp(e.deltaY * 0.0015));
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1; // lines or pages to pixels
+    const dx = e.deltaX * unit;
+    const dy = e.deltaY * unit;
+    if (e.ctrlKey) zoomBy(Math.exp(dy * 0.004)); // trackpad pinch arrives as ctrl+wheel
+    else if (Math.abs(dx) > Math.abs(dy)) orbitBy(dx * 0.6, 0);
+    else zoomBy(Math.exp(dy * 0.0015));
   },
   { passive: false }
 );
@@ -522,7 +528,11 @@ function frame(now: number): void {
     fpsAccum = 0;
   }
   overlay.setBeat(env, elapsed - lastBeatAt < 0.08);
-  overlay.setLoading(audio.buffering);
+  // Hysteresis: show after 0.3 s of buffering, hide after 0.3 s of flow, so the edge does not flicker.
+  bufferingFor = audio.buffering ? bufferingFor + dt : 0;
+  flowingFor = audio.buffering ? 0 : flowingFor + dt;
+  if (bufferingFor > 0.3) overlay.setLoading(true);
+  else if (flowingFor > 0.3) overlay.setLoading(false);
   adapt(dt);
 
   if (bench) {

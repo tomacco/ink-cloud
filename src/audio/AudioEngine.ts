@@ -52,6 +52,7 @@ export class AudioEngine {
     };
     for (const ev of ['play', 'pause', 'ended', 'error', 'waiting', 'playing', 'loadedmetadata'])
       this.media.addEventListener(ev, () => this.onStateChange?.());
+    this.media.addEventListener('error', () => (this.wantPlaying = false));
   }
 
   get isLive(): boolean {
@@ -86,9 +87,9 @@ export class AudioEngine {
   /** Progressive playback of a remote URL. The server must send CORS headers. */
   async useStream(url: string): Promise<void> {
     this.prepareStream(url);
+    this.wantPlaying = true;
     await this.resume();
     await this.media.play();
-    this.wantPlaying = true;
     this.onStateChange?.();
   }
 
@@ -125,7 +126,7 @@ export class AudioEngine {
   /** True while a stream or file we want to hear has not buffered enough to play. */
   get buffering(): boolean {
     if (this.kind !== 'stream' && this.kind !== 'file') return false;
-    return this.wantPlaying && this.media.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
+    return this.wantPlaying && !this.media.error && this.media.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
   }
 
   async useFile(file: File): Promise<void> {
@@ -135,9 +136,9 @@ export class AudioEngine {
     node.connect(this.analyser);
     node.connect(this.ctx.destination);
     this.media.src = URL.createObjectURL(file);
+    this.wantPlaying = true;
     await this.resume();
     await this.media.play();
-    this.wantPlaying = true;
     this.onStateChange?.();
   }
 

@@ -97,7 +97,7 @@ export function createDebugPanel(container: HTMLElement, hooks: DebugHooks): GUI
 
   const cam = gui.addFolder('Camera');
   cam.add(p, 'orbitSpeed', -0.3, 0.3, 0.005).name('orbit speed');
-  cam.add(p, 'camDistance', 1.2, 8, 0.05).name('distance');
+  cam.add(p, 'camDistance', 1.6, 8, 0.05).name('distance');
   cam.add(p, 'camDrift', 0, 1, 0.01).name('drift');
 
   for (const f of [particles, motion, beat, det, look, mode, touch, cam]) f.close();

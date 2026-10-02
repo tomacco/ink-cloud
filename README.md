@@ -16,7 +16,7 @@
 
 ---
 
-**Tap** and the music starts: the stream is already buffering when the page opens, the first touch is only the permission browsers require. A small pulse at the top shows while the network is behind. **Press and hold** and the ink gathers around your finger; keep holding for two seconds and the controls appear. From there you can change the sound source, switch mode, open the settings, or hide everything again (`H` on a keyboard, the eye button on a phone). `Space` pauses.
+**Tap** and the music starts: the stream buffers from the moment the page opens where the browser allows it (iOS Safari waits for the touch), and the first touch is the permission browsers require. A small pulse at the top shows while the network is behind. **Press and hold** and the ink gathers around your finger; keep holding for two seconds and the controls appear. From there you can change the sound source, switch mode, open the settings, or hide everything again (`H` on a keyboard, the eye button on a phone). `Space` pauses.
 
 | Gesture | Does |
 | --- | --- |
