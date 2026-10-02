@@ -3,8 +3,9 @@ import 'amazing-glass';
 import { registerIcon } from 'amazing-glass';
 import type { AudioEngine, SourceKind } from '../audio/AudioEngine';
 
-// The glass UI: a click-to-play gate with the source chooser, a floating
-// toolbar and the debug panel container. Everything hides with H.
+// The glass UI. The page starts with nothing but the ink and a hint; a long
+// press reveals the floating toolbar, and the toolbar opens the source chooser
+// and the settings panel. Everything hides again with H or the eye button.
 
 export const DEFAULT_STREAM =
   'https://archive.org/download/WkBw0034/01-Monochromatic-Immobility-.mp3';
@@ -14,7 +15,7 @@ const SOURCE_NOTES: Record<string, string> = {
   Stream:
     'Streams a Creative Commons track (MonoChromatic, "Immobility", CC BY-NC-SA) straight from archive.org. Paste any CORS-enabled MP3 URL.',
   'Tab audio':
-    'Play "Lumen Chamber" by Deescawa on YouTube in another tab, then pick that tab and tick "Share tab audio". Analysed live, nothing is downloaded.',
+    'Play "Lumen Chamber" by Deescawa on YouTube in another tab, then pick that tab and tick "Share tab audio". Analysed live, nothing is downloaded. Desktop Chrome and Edge only.',
   File: 'Pick a local audio file. It plays from disk, nothing is uploaded.',
   Mic: 'Listens to the microphone or line input.',
   Silent: 'No audio. Beats come from the manual BPM clock in the settings panel.',
@@ -36,7 +37,6 @@ registerIcon(
   'arrowTriangle2Circlepath',
   '<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 0 1-13.7 5.6M4 12a8 8 0 0 1 13.7-5.6"/><path d="M17 3v4h-4M7 21v-4h4"/></g>'
 );
-
 // Elements upgraded before the icons above existed: re-apply so they render.
 for (const el of document.querySelectorAll('ag-button[icon]')) el.setAttribute('icon', el.getAttribute('icon')!);
 
@@ -44,13 +44,13 @@ export interface OverlayHandlers {
   onStart: (choice: SourceKind, extra: { url?: string; file?: File }) => Promise<void>;
   onTogglePlay: () => void;
   onToggleSettings: () => void;
-  onToggleHidden: (hidden: boolean) => void;
 }
 
 export class Overlay {
   readonly gate = document.getElementById('gate') as HTMLDivElement;
   readonly hud = document.getElementById('hud') as HTMLDivElement;
   readonly panel = document.getElementById('panel') as HTMLElement;
+  private hint = document.getElementById('hint') as HTMLDivElement;
   private source = document.getElementById('source') as HTMLElement & { value: string };
   private sourceNote = document.getElementById('source-note') as HTMLParagraphElement;
   private streamUrl = document.getElementById('stream-url') as HTMLInputElement;
@@ -61,7 +61,7 @@ export class Overlay {
   private beatDot = document.getElementById('beat') as HTMLSpanElement;
   private trackLabel = document.getElementById('track') as HTMLSpanElement;
   private fpsLabel = document.getElementById('fps') as HTMLSpanElement;
-  private hidden = false;
+  hidden = true;
   private file: File | null = null;
 
   constructor(private handlers: OverlayHandlers) {
@@ -73,6 +73,7 @@ export class Overlay {
       this.updateSourceNote();
     });
     this.startBtn.addEventListener('click', () => void this.start());
+    document.getElementById('gate-close')!.addEventListener('click', () => (this.gate.hidden = true));
     this.playBtn.addEventListener('click', () => handlers.onTogglePlay());
     document.getElementById('change-source')!.addEventListener('click', () => this.showGate());
     document.getElementById('settings')!.addEventListener('click', () => handlers.onToggleSettings());
@@ -84,9 +85,12 @@ export class Overlay {
         e.preventDefault();
         handlers.onTogglePlay();
       }
-      if (e.key === 'Escape' && this.hidden) this.setHidden(false);
+      if (e.key === 'Escape') {
+        if (!this.gate.hidden) this.gate.hidden = true;
+        else if (this.hidden) this.setHidden(false);
+      }
     });
-    this.hud.hidden = true;
+    this.hud.classList.add('hidden');
   }
 
   private choice(): SourceKind {
@@ -125,7 +129,7 @@ export class Overlay {
     try {
       await this.handlers.onStart(kind, { url: this.streamUrl.value.trim(), file: this.file ?? undefined });
       this.gate.hidden = true;
-      this.hud.hidden = false;
+      this.setHidden(false);
     } catch (err) {
       this.gateError.textContent = err instanceof Error ? err.message : String(err);
       this.gateError.hidden = false;
@@ -138,11 +142,15 @@ export class Overlay {
     this.gate.hidden = false;
   }
 
+  /** Called once the long press has lasted long enough. */
+  reveal(): void {
+    this.hint.classList.add('gone');
+    this.setHidden(false);
+  }
+
   setHidden(hidden: boolean): void {
     this.hidden = hidden;
     this.hud.classList.toggle('hidden', hidden);
-    document.body.style.cursor = hidden ? 'none' : '';
-    this.handlers.onToggleHidden(hidden);
   }
 
   setPanelOpen(open: boolean): void {
@@ -161,10 +169,10 @@ export class Overlay {
       none: 'silent',
     };
     let label = labels[audio.kind];
-    if (audio.kind === 'stream' || audio.kind === 'file') {
+    if (audio.kind === 'stream') {
       try {
         const name = decodeURIComponent(audio.media.src.split('/').pop() ?? '');
-        if (name && audio.kind === 'stream') label = name.replace(/\.[a-z0-9]+$/i, '');
+        if (name) label = name.replace(/\.[a-z0-9]+$/i, '');
       } catch {
         /* keep generic label */
       }

@@ -54,6 +54,8 @@ uniform float uStrandSpread;
 uniform float uEmitterDrift;
 uniform float uBeatEnv;
 uniform float uAttractor;
+uniform vec4 uTouch;        // xyz = finger in world space, w = hold strength 0..1
+uniform float uTouchStrength;
 uniform float uSeed;
 
 ${NOISE_GLSL}
@@ -128,6 +130,14 @@ void main() {
     v -= (p / r) * pull * uDt;
   }
 
+  // Press and hold: ink gathers around the finger (pull + extra drag nearby).
+  if (uTouch.w > 0.001) {
+    vec3 td = uTouch.xyz - p;
+    float tl = max(length(td), 1e-3);
+    v += (td / tl) * uTouch.w * uTouchStrength * (tl / (tl + 0.25)) * uDt;
+    v *= 1.0 - min(0.9, uTouch.w * 4.0 * uDt * exp(-tl * tl * 12.0));
+  }
+
   p += v * uDt;
 
   oPos = vec4(p, pos.w);
@@ -182,6 +192,8 @@ export class ParticleSim {
         uEmitterDrift: { value: 0.05 },
         uBeatEnv: { value: 0 },
         uAttractor: { value: 2 },
+        uTouch: { value: new THREE.Vector4(0, 0, 0, 0) },
+        uTouchStrength: { value: 3 },
         uSeed: { value: this.seed },
       },
     });
@@ -246,8 +258,11 @@ export class ParticleSim {
     for (let i = 0; i < steps; i++) this.step(p, dt, 0);
   }
 
-  step(p: Params, dt: number, beatEnv: number): void {
+  step(p: Params, dt: number, beatEnv: number, touch: THREE.Vector4 | null = null): void {
     const u = this.material.uniforms;
+    if (touch) (u.uTouch.value as THREE.Vector4).copy(touch);
+    else (u.uTouch.value as THREE.Vector4).set(0, 0, 0, 0);
+    u.uTouchStrength.value = p.touchStrength;
     this.time += dt;
     u.uTime.value = this.time;
     u.uDt.value = dt;

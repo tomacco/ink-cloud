@@ -38,6 +38,10 @@ export const params = {
   audioTurbulence: 0.5, // loudness -> noise strength modulation
   audioDetail: 0.6, // high band -> detail octave modulation
 
+  // --- touch ------------------------------------------------------------
+  touchStrength: 3.0, // pull toward the finger while pressing
+  touchHold: 2.0, // seconds of holding before the controls appear
+
   // --- look -------------------------------------------------------------
   inkDensity: 1.0, // k in 1 - exp(-density * k)
   pointSize: 1.2, // base sprite size in px at 1x DPR
