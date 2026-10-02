@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Ink cloud</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <!-- click-to-play gate -->
+    <div id="gate">
+      <ag-glass variant="regular" class="gate-card">
+        <h1>Ink cloud</h1>
+        <p class="lede">A million ink particles breathing with the music. Pick a source, then start.</p>
+        <ag-segmented id="source" options="Stream,Tab audio,File,Mic,Silent" value="Stream"></ag-segmented>
+        <p id="source-note" class="note"></p>
+        <input id="stream-url" class="text" type="url" spellcheck="false" />
+        <input id="file-input" type="file" accept="audio/*" hidden />
+        <ag-button id="start" variant="prominent" size="large">Start</ag-button>
+        <p id="gate-error" class="error" hidden></p>
+      </ag-glass>
+    </div>
+
+    <!-- floating controls (press H to hide everything) -->
+    <div id="hud">
+      <ag-toolbar id="bar">
+        <ag-toolbar-group>
+          <ag-button id="play" variant="plain" icon="pause" aria-label="Play or pause"></ag-button>
+          <ag-button id="change-source" variant="plain" icon="arrowTriangle2Circlepath" aria-label="Change source"></ag-button>
+          <span id="beat" class="beat" title="beat"></span>
+          <span id="track" class="track"></span>
+        </ag-toolbar-group>
+        <ag-toolbar-group>
+          <span id="fps" class="fps">-- fps</span>
+        </ag-toolbar-group>
+        <ag-toolbar-group>
+          <ag-button id="settings" variant="plain" icon="sliders" aria-label="Settings"></ag-button>
+          <ag-button id="hide" variant="plain" icon="eyeSlash" aria-label="Hide interface (H)"></ag-button>
+        </ag-toolbar-group>
+      </ag-toolbar>
+      <ag-glass id="panel" variant="regular" class="panel"></ag-glass>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

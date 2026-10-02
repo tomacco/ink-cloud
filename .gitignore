@@ -1,0 +1,5 @@
+node_modules
+dist
+public/audio/*.mp3
+.DS_Store
+.bench
