@@ -1,12 +1,18 @@
 import * as THREE from 'three';
 import type { Params } from '../params';
 import type { ParticleSim } from '../sim/ParticleSim';
+import type { GpuTimer } from './GpuTimer';
 
-// Ink-on-paper rendering in two passes:
-//   1. accumulate: every particle adds "ink density" into a single-channel float
-//      target with additive blending (optionally on top of a decayed copy of
-//      the previous frame = trails).
-//   2. composite: density -> darkness with 1 - exp(-density * k), multiplied
+// Ink-on-paper rendering in three passes:
+//   1. stroke pre-pass: one fragment per particle computes the screen-space
+//      segment from the particle to an older neighbour on its streakline:
+//      endpoints, width (depth of field), ink weight. Doing this once per
+//      particle instead of once per quad vertex is what keeps 1M strokes cheap.
+//   2. accumulate: instanced capsules add "ink density" into single-channel
+//      float targets with additive blending. Thin strokes go to a full-res
+//      buffer, wide (blurred) strokes to a small one where fill is cheap.
+//      Optionally on top of a decayed copy of the previous frame (trails).
+//   3. composite: density -> darkness with 1 - exp(-density * k), multiplied
 //      onto a warm paper tone with a vignette and film grain.
 
 const HASH_GLSL = /* glsl */ `
@@ -20,14 +26,31 @@ float hash12(vec2 p) {
 }
 `;
 
-const POINTS_VERT = /* glsl */ `
+const QUAD_VERT = /* glsl */ `
+out vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}
+`;
+
+// ---------------------------------------------------------------------------
+// Pass 1: per-particle stroke data (MRT)
+//   o0 = (sA.xy, sB.xy) screen px at full resolution
+//   o1 = (width px, ink weight, length px, state) state: 0 hidden, 1 thin, 2 wide
+const PREPASS_FRAG = /* glsl */ `
 precision highp float;
 precision highp sampler2D;
-in float pid;
+in vec2 vUv;
+layout(location = 0) out vec4 o0;
+layout(location = 1) out vec4 o1;
 uniform sampler2D tPos;
 uniform sampler2D tVel;
+uniform mat4 uModelView;
+uniform mat4 uProjection;
 uniform float uTexSize;
 uniform float uStrandSize;
+uniform float uRibbonLines;
 uniform float uTime;
 uniform float uSeed;
 uniform float uPointSize;
@@ -40,80 +63,144 @@ uniform float uPixelRatio;
 uniform float uCamDist;
 uniform float uBeatEnv;
 uniform float uBeatSqueeze;
-uniform float uRibbonLines;
-uniform float uDofLod;
-out float vAlpha;
+uniform float uMaxGap;
+uniform float uWideThreshold;
+uniform vec2 uResolution;
 ${HASH_GLSL}
 
+vec2 texel(float id) {
+  float px = mod(id, uTexSize);
+  float py = floor(id / uTexSize);
+  return (vec2(px, py) + 0.5) / uTexSize;
+}
+
+vec3 squeeze(vec3 p, float vary) {
+  float r = length(p);
+  return p * (1.0 - uBeatEnv * uBeatSqueeze * vary * (r / (r + 0.6)));
+}
+
 void main() {
-  float px = mod(pid, uTexSize);
-  float py = floor(pid / uTexSize);
-  vec2 uv = (vec2(px, py) + 0.5) / uTexSize;
-  vec4 pos = texture(tPos, uv);
-  vec4 vel = texture(tVel, uv);
+  float px = floor(vUv.x * uTexSize);
+  float py = floor(vUv.y * uTexSize);
+  float pid = px + py * uTexSize;
   float strand = floor(pid / uStrandSize);
+  float member = pid - strand * uStrandSize;
   float group = floor(strand / uRibbonLines);
   vec3 hs = hash31(group * 5.31 + 77.0 + uSeed);
+  float vary = 0.5 + hs.z; // each ribbon inhales by its own amount
 
-  float life = max(vel.w, 1e-3);
-  float u = clamp((uTime - pos.w) / life, 0.0, 1.0);
+  vec4 posA = texture(tPos, vUv);
+  vec4 velA = texture(tVel, vUv);
+  float life = max(velA.w, 1e-3);
+  float u = clamp((uTime - posA.w) / life, 0.0, 1.0);
   float fade = smoothstep(0.0, 0.02, u) * (1.0 - smoothstep(0.55, 1.0, u));
-  float visible = 1.0;
 
-  vec3 p = pos.xyz;
-  float r = length(p);
-  p *= 1.0 - uBeatEnv * uBeatSqueeze * (r / (r + 0.6));
-
-  vec4 mv = modelViewMatrix * vec4(p, 1.0);
-  float viewZ = -mv.z;
-  gl_Position = projectionMatrix * mv;
-
+  vec4 mvA = uModelView * vec4(squeeze(posA.xyz, vary), 1.0);
+  float viewZ = -mvA.z;
   float soft = step(hs.x, uSoftFraction);
   float base = mix(uPointSize, uSoftSize, soft);
   float coc = clamp(abs(viewZ - (uCamDist + uDofFocal)) * uDofBlur, 0.0, uDofMax);
-  float size = (base + coc) * uPixelRatio * (uCamDist / max(viewZ, 0.1));
-  size = clamp(size, 1.0, 96.0 * uPixelRatio);
-  gl_PointSize = size;
+  float width = (base + coc) * uPixelRatio * (uCamDist / max(viewZ, 0.1));
+  width = clamp(width, 1.0, 96.0 * uPixelRatio);
+  float wide = step(uWideThreshold * uPixelRatio, width);
 
-  // Ink is conserved: a bigger sprite spreads the same ink over more pixels.
+  // Wide (blurred) strokes need fewer, longer segments: every k-th particle
+  // draws one segment spanning k particles. Same ink, k times less fill.
+  float k = clamp(floor(width / (3.0 * uPixelRatio)), 1.0, 32.0);
+  // Wide strokes are drawn by a pass that visits every 4th particle only.
+  k = mix(k, 4.0 * floor(k / 4.0), wide);
+  float visible = 1.0 - step(0.5, mod(member, k));
+  float nid = strand * uStrandSize + mod(member + k, uStrandSize);
+  vec4 posB = texture(tPos, texel(nid));
+  // The neighbour must be older; if it is younger the line wraps here.
+  visible *= step(posB.w, posA.w - 1e-4);
+  if (distance(posA.xyz, posB.xyz) > uMaxGap) visible = 0.0; // a jump, not a stroke
+
+  vec4 mvB = uModelView * vec4(squeeze(posB.xyz, vary), 1.0);
+  vec4 cA = uProjection * mvA;
+  vec4 cB = uProjection * mvB;
+  if (cA.w <= 0.01 || cB.w <= 0.01) visible = 0.0;
+  vec2 sA = (cA.xy / max(cA.w, 0.01) * 0.5 + 0.5) * uResolution;
+  vec2 sB = (cB.xy / max(cB.w, 0.01) * 0.5 + 0.5) * uResolution;
+  float len = distance(sA, sB);
+
+  // Ink is conserved across the width; a wide stroke is a faint one.
   float ref = uPointSize * uPixelRatio;
-  float weight = (ref * ref) / (size * size);
+  float weight = ref / width;
+  // A stretched stroke is diluted ink: fade segments that span more than a few pixels.
+  weight *= min(1.0, (5.0 * uPixelRatio * k) / max(len, 1.0));
+  float alpha = fade * weight * mix(1.0, 0.55, soft);
 
-  // Level of detail for blurred sprites: keep 1 in N, give it N times the ink.
-  // Fill rate per particle stays bounded; the soft haze looks the same.
-  if (uDofLod > 0.0) {
-    float lodRef = uDofLod * uPixelRatio;
-    float area = (size * size) / (lodRef * lodRef);
-    if (area > 1.0) {
-      float keep = 1.0 / area;
-      float hp = hash31(pid * 0.6180339 + uSeed).z;
-      if (hp > keep) visible = 0.0;
-      weight *= area;
-    }
-  }
-
-  vAlpha = fade * weight * mix(1.0, 0.55, soft);
-  if (visible < 0.5) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  o0 = vec4(sA, sB);
+  o1 = vec4(width, alpha, len, visible * (1.0 + wide));
 }
 `;
 
-const POINTS_FRAG = /* glsl */ `
+// ---------------------------------------------------------------------------
+// Pass 2: instanced capsules, reading the pre-pass
+const SEG_VERT = /* glsl */ `
+precision highp float;
+precision highp sampler2D;
+in vec2 corner;      // x: 0 = this particle, 1 = older neighbour; y: -1..1 across
+in float pid;        // instanced
+uniform sampler2D tStroke0;
+uniform sampler2D tStroke1;
+uniform float uTexSize;
+uniform float uPass;   // 0 = thin strokes (full res), 1 = wide strokes (low res)
+uniform float uScale;  // this target's resolution relative to full
+uniform float uStride; // instance i draws particle i * uStride
+uniform vec2 uResolution;
+out float vAlpha;
+out float vAcross;
+out float vAlong;
+out float vLen;
+out float vWidth;
+
+void main() {
+  float id = pid * uStride;
+  float px = mod(id, uTexSize);
+  float py = floor(id / uTexSize);
+  vec2 uv = (vec2(px, py) + 0.5) / uTexSize;
+  vec4 s0 = texture(tStroke0, uv);
+  vec4 s1 = texture(tStroke1, uv);
+  if (s1.w < 0.5 || abs((s1.w - 1.0) - uPass) > 0.5) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    vAlpha = 0.0; vAcross = 0.0; vAlong = 0.0; vLen = 1.0; vWidth = 1.0;
+    return;
+  }
+  vec2 sA = s0.xy * uScale;
+  vec2 sB = s0.zw * uScale;
+  float width = max(1.0, s1.x * uScale);
+  float len = s1.z * uScale;
+  vec2 d = sB - sA;
+  vec2 dir = len > 1e-3 ? d / len : vec2(1.0, 0.0);
+  vec2 nrm = vec2(-dir.y, dir.x);
+  // Capsule: extend both ends by half the width; the fragment shader rounds them.
+  vec2 pos = mix(sA, sB, corner.x) + dir * (corner.x * 2.0 - 1.0) * width * 0.5 + nrm * corner.y * width * 0.5;
+  vAlong = mix(-0.5 * width, len + 0.5 * width, corner.x);
+  vLen = len;
+  vWidth = width;
+  vAlpha = s1.y;
+  vAcross = corner.y;
+  vec2 ndc = pos / uResolution * 2.0 - 1.0;
+  gl_Position = vec4(ndc, 0.0, 1.0);
+}
+`;
+
+const SEG_FRAG = /* glsl */ `
 precision highp float;
 in float vAlpha;
+in float vAcross;
+in float vAlong;
+in float vLen;
+in float vWidth;
 layout(location = 0) out vec4 oDensity;
 void main() {
-  vec2 c = gl_PointCoord - 0.5;
-  float d2 = dot(c, c) * 4.0;
-  float falloff = exp(-d2 * 5.0) * step(d2, 1.0);
+  // Distance to the segment axis, normalised so 1 = the capsule edge.
+  float endGap = max(0.0, max(-vAlong, vAlong - vLen)) / (0.5 * vWidth);
+  float q2 = vAcross * vAcross + endGap * endGap;
+  float falloff = exp(-q2 * 4.0);
   oDensity = vec4(vAlpha * falloff, 0.0, 0.0, 1.0);
-}
-`;
-
-const QUAD_VERT = /* glsl */ `
-out vec2 vUv;
-void main() {
-  vUv = uv;
-  gl_Position = vec4(position.xy, 0.0, 1.0);
 }
 `;
 
@@ -129,11 +216,14 @@ void main() {
 }
 `;
 
+// ---------------------------------------------------------------------------
+// Pass 3: paper
 const COMPOSITE_FRAG = /* glsl */ `
 precision highp float;
 precision highp sampler2D;
 in vec2 vUv;
 uniform sampler2D tDensity;
+uniform sampler2D tWide;
 uniform float uInk;
 uniform float uGrain;
 uniform float uVignette;
@@ -143,7 +233,7 @@ uniform vec2 uResolution;
 layout(location = 0) out vec4 oColor;
 ${HASH_GLSL}
 void main() {
-  float d = texture(tDensity, vUv).r;
+  float d = texture(tDensity, vUv).r + texture(tWide, vUv).r;
   float ink = 1.0 - exp(-d * uInk);
 
   vec2 c = vUv - 0.5;
@@ -167,9 +257,17 @@ export class InkRenderer {
   private pixelRatio = 1;
   private accumA!: THREE.WebGLRenderTarget;
   private accumB!: THREE.WebGLRenderTarget;
-  private pointsScene = new THREE.Scene();
-  private points!: THREE.Points;
-  private pointsMat: THREE.ShaderMaterial;
+  private wideA!: THREE.WebGLRenderTarget;
+  private wideB!: THREE.WebGLRenderTarget;
+  private wideScale = 0.35;
+  private wideW = 1;
+  private wideH = 1;
+  private strokeData!: THREE.WebGLRenderTarget;
+  private prepassMat: THREE.ShaderMaterial;
+  private prepassScene = new THREE.Scene();
+  private strokeScene = new THREE.Scene();
+  private strokes!: THREE.Mesh;
+  private strokeMat: THREE.ShaderMaterial;
   private quadScene = new THREE.Scene();
   private quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private quad: THREE.Mesh;
@@ -178,30 +276,27 @@ export class InkRenderer {
   private floatBlend: boolean;
   private seed = Math.random() * 100;
   private hadTrails = false;
+  private count = 0;
 
   constructor(renderer: THREE.WebGLRenderer, sim: ParticleSim) {
     this.renderer = renderer;
     this.floatBlend = renderer.extensions.has('EXT_float_blend');
     if (this.floatBlend) renderer.extensions.get('EXT_float_blend');
 
-    this.pointsMat = new THREE.ShaderMaterial({
+    this.prepassMat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
-      vertexShader: POINTS_VERT,
-      fragmentShader: POINTS_FRAG,
+      vertexShader: QUAD_VERT,
+      fragmentShader: PREPASS_FRAG,
       depthTest: false,
       depthWrite: false,
-      transparent: true,
-      blending: THREE.CustomBlending,
-      blendEquation: THREE.AddEquation,
-      blendSrc: THREE.OneFactor,
-      blendDst: THREE.OneFactor,
-      blendSrcAlpha: THREE.OneFactor,
-      blendDstAlpha: THREE.OneFactor,
       uniforms: {
         tPos: { value: null },
         tVel: { value: null },
+        uModelView: { value: new THREE.Matrix4() },
+        uProjection: { value: new THREE.Matrix4() },
         uTexSize: { value: 1 },
-        uStrandSize: { value: 8 },
+        uStrandSize: { value: 256 },
+        uRibbonLines: { value: 4 },
         uTime: { value: 0 },
         uSeed: { value: this.seed },
         uPointSize: { value: 1.4 },
@@ -214,11 +309,40 @@ export class InkRenderer {
         uCamDist: { value: 3.3 },
         uBeatEnv: { value: 0 },
         uBeatSqueeze: { value: 0 },
-        uRibbonLines: { value: 4 },
-        uDofLod: { value: 0 },
+        uMaxGap: { value: 0.12 },
+        uWideThreshold: { value: 5 },
+        uResolution: { value: new THREE.Vector2(1, 1) },
       },
     });
-    this.buildPoints(sim.count);
+    const prepassQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.prepassMat);
+    prepassQuad.frustumCulled = false;
+    this.prepassScene.add(prepassQuad);
+
+    this.strokeMat = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader: SEG_VERT,
+      fragmentShader: SEG_FRAG,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      side: THREE.DoubleSide,
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneFactor,
+      blendSrcAlpha: THREE.OneFactor,
+      blendDstAlpha: THREE.OneFactor,
+      uniforms: {
+        tStroke0: { value: null },
+        tStroke1: { value: null },
+        uTexSize: { value: 1 },
+        uPass: { value: 0 },
+        uScale: { value: 1 },
+        uStride: { value: 1 },
+        uResolution: { value: new THREE.Vector2(1, 1) },
+      },
+    });
+    this.buildStrokes(sim.count);
 
     this.decayMat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
@@ -236,6 +360,7 @@ export class InkRenderer {
       depthWrite: false,
       uniforms: {
         tDensity: { value: null },
+        tWide: { value: null },
         uInk: { value: 1 },
         uGrain: { value: 0.04 },
         uVignette: { value: 0.5 },
@@ -249,20 +374,40 @@ export class InkRenderer {
     this.quadScene.add(this.quad);
   }
 
-  /** Rebuild the index geometry when the particle count changes. */
-  buildPoints(count: number): void {
-    if (this.points) {
-      this.pointsScene.remove(this.points);
-      this.points.geometry.dispose();
+  /** One instanced quad per particle plus the stroke-data target; rebuilt when the count changes. */
+  buildStrokes(count: number): void {
+    this.count = count;
+    if (this.strokes) {
+      this.strokeScene.remove(this.strokes);
+      this.strokes.geometry.dispose();
     }
+    const geo = new THREE.InstancedBufferGeometry();
+    const corner = new Float32Array([0, -1, 1, -1, 1, 1, 0, 1]);
+    geo.setAttribute('corner', new THREE.BufferAttribute(corner, 2));
+    // Three needs a position attribute to count vertices; corners double as it.
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3));
+    geo.setIndex([0, 1, 2, 0, 2, 3]);
     const pid = new Float32Array(count);
     for (let i = 0; i < count; i++) pid[i] = i;
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('pid', new THREE.BufferAttribute(pid, 1));
-    geo.setDrawRange(0, count);
-    this.points = new THREE.Points(geo, this.pointsMat);
-    this.points.frustumCulled = false;
-    this.pointsScene.add(this.points);
+    geo.setAttribute('pid', new THREE.InstancedBufferAttribute(pid, 1));
+    geo.instanceCount = count;
+    this.strokes = new THREE.Mesh(geo, this.strokeMat);
+    this.strokes.frustumCulled = false;
+    this.strokeScene.add(this.strokes);
+
+    const size = Math.round(Math.sqrt(count));
+    this.strokeData?.dispose();
+    this.strokeData = new THREE.WebGLRenderTarget(size, size, {
+      count: 2,
+      type: THREE.FloatType,
+      format: THREE.RGBAFormat,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      depthBuffer: false,
+      stencilBuffer: false,
+      generateMipmaps: false,
+    });
+    for (const t of this.strokeData.textures) t.generateMipmaps = false;
   }
 
   setSize(width: number, height: number, pixelRatio: number): void {
@@ -271,27 +416,49 @@ export class InkRenderer {
     this.pixelRatio = pixelRatio;
     this.accumA?.dispose();
     this.accumB?.dispose();
+    this.wideA?.dispose();
+    this.wideB?.dispose();
     const opts: THREE.RenderTargetOptions = {
       type: this.floatBlend ? THREE.FloatType : THREE.HalfFloatType,
       format: THREE.RedFormat,
-      minFilter: THREE.NearestFilter,
-      magFilter: THREE.NearestFilter,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
       depthBuffer: false,
       stencilBuffer: false,
       generateMipmaps: false,
     };
     this.accumA = new THREE.WebGLRenderTarget(this.width, this.height, opts);
     this.accumB = new THREE.WebGLRenderTarget(this.width, this.height, opts);
+    this.wideW = Math.max(1, Math.floor(this.width * this.wideScale));
+    this.wideH = Math.max(1, Math.floor(this.height * this.wideScale));
+    this.wideA = new THREE.WebGLRenderTarget(this.wideW, this.wideH, opts);
+    this.wideB = new THREE.WebGLRenderTarget(this.wideW, this.wideH, opts);
     this.compositeMat.uniforms.uResolution.value.set(this.width, this.height);
+    this.prepassMat.uniforms.uResolution.value.set(this.width, this.height);
   }
 
-  render(p: Params, sim: ParticleSim, camera: THREE.PerspectiveCamera, camDist: number, beatEnv: number, time: number): void {
+  render(
+    p: Params,
+    sim: ParticleSim,
+    camera: THREE.PerspectiveCamera,
+    camDist: number,
+    beatEnv: number,
+    time: number,
+    timer: GpuTimer | null = null
+  ): void {
     const r = this.renderer;
-    const u = this.pointsMat.uniforms;
+
+    // 1. per-particle stroke data
+    timer?.begin('prepass');
+    const u = this.prepassMat.uniforms;
     u.tPos.value = sim.positionTexture;
     u.tVel.value = sim.velocityTexture;
+    camera.updateMatrixWorld();
+    (u.uModelView.value as THREE.Matrix4).copy(camera.matrixWorldInverse);
+    (u.uProjection.value as THREE.Matrix4).copy(camera.projectionMatrix);
     u.uTexSize.value = sim.texSize;
     u.uStrandSize.value = p.strandSize;
+    u.uRibbonLines.value = p.ribbonLines;
     u.uTime.value = sim.time;
     u.uPointSize.value = p.pointSize;
     u.uSoftFraction.value = p.softFraction;
@@ -303,28 +470,31 @@ export class InkRenderer {
     u.uCamDist.value = camDist;
     u.uBeatEnv.value = beatEnv;
     u.uBeatSqueeze.value = p.beatSqueeze;
-    u.uRibbonLines.value = p.ribbonLines;
-    u.uDofLod.value = p.dofLod;
+    u.uMaxGap.value = p.maxGap;
+    u.uWideThreshold.value = p.wideThreshold;
+    r.setRenderTarget(this.strokeData);
+    r.render(this.prepassScene, this.quadCam);
+    timer?.end();
 
-    // 1. accumulate
-    r.setRenderTarget(this.accumA);
-    if (p.trails && this.hadTrails) {
-      this.decayMat.uniforms.tPrev.value = this.accumB.texture;
-      this.decayMat.uniforms.uDecay.value = p.trailDecay;
-      this.quad.material = this.decayMat;
-      r.render(this.quadScene, this.quadCam);
-    } else {
-      r.setClearColor(0x000000, 1);
-      r.clear(true, false, false);
-    }
+    // 2. accumulate: thin strokes at full resolution, wide (blurred) strokes
+    // into a small buffer where their fill cost is a fraction.
+    timer?.begin('strokes');
+    const s = this.strokeMat.uniforms;
+    s.tStroke0.value = this.strokeData.textures[0];
+    s.tStroke1.value = this.strokeData.textures[1];
+    s.uTexSize.value = sim.texSize;
+    this.accumulate(this.accumA, this.accumB, 0, this.width, this.height, 1, p);
+    this.accumulate(this.wideA, this.wideB, 1, this.wideW, this.wideH, this.wideScale, p);
     this.hadTrails = p.trails;
-    r.render(this.pointsScene, camera);
+    timer?.end();
 
-    // 2. composite
+    // 3. composite
+    timer?.begin('composite');
     const c = this.compositeMat.uniforms;
     c.tDensity.value = this.accumA.texture;
+    c.tWide.value = this.wideA.texture;
     // k is normalised so darkness does not change with particle count.
-    c.uInk.value = p.inkDensity * 0.35 * (1048576 / sim.count);
+    c.uInk.value = p.inkDensity * 0.2 * (1048576 / sim.count);
     c.uGrain.value = p.grain;
     c.uVignette.value = p.vignette;
     c.uWarmth.value = p.paperWarmth;
@@ -332,9 +502,43 @@ export class InkRenderer {
     this.quad.material = this.compositeMat;
     r.setRenderTarget(null);
     r.render(this.quadScene, this.quadCam);
+    timer?.end();
 
     const t = this.accumA;
     this.accumA = this.accumB;
     this.accumB = t;
+    const w = this.wideA;
+    this.wideA = this.wideB;
+    this.wideB = w;
+  }
+
+  private accumulate(
+    target: THREE.WebGLRenderTarget,
+    prev: THREE.WebGLRenderTarget,
+    pass: number,
+    width: number,
+    height: number,
+    scale: number,
+    p: Params
+  ): void {
+    const r = this.renderer;
+    const s = this.strokeMat.uniforms;
+    s.uPass.value = pass;
+    s.uScale.value = scale;
+    const stride = pass === 1 ? 4 : 1;
+    s.uStride.value = stride;
+    (this.strokes.geometry as THREE.InstancedBufferGeometry).instanceCount = Math.floor(this.count / stride);
+    s.uResolution.value.set(width, height);
+    r.setRenderTarget(target);
+    if (p.trails && this.hadTrails) {
+      this.decayMat.uniforms.tPrev.value = prev.texture;
+      this.decayMat.uniforms.uDecay.value = p.trailDecay;
+      this.quad.material = this.decayMat;
+      r.render(this.quadScene, this.quadCam);
+    } else {
+      r.setClearColor(0x000000, 1);
+      r.clear(true, false, false);
+    }
+    r.render(this.strokeScene, this.quadCam);
   }
 }

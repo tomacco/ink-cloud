@@ -4,6 +4,7 @@ import { params, TEX_SIZES, type Params } from '../params';
 export interface DebugHooks {
   onTexSize: (size: number) => void;
   onReset: () => void;
+  onResize: () => void;
   stats: { fps: number; particles: number; flux: number; threshold: number; env: number; source: string };
 }
 
@@ -74,7 +75,9 @@ export function createDebugPanel(container: HTMLElement, hooks: DebugHooks): GUI
   look.add(p, 'dofFocal', -2, 2, 0.01).name('DOF focal offset');
   look.add(p, 'dofBlur', 0, 60, 0.5).name('DOF blur');
   look.add(p, 'dofMax', 1, 96, 1).name('DOF max px');
-  look.add(p, 'dofLod', 0, 20, 0.5).name('DOF thinning (px)');
+  look.add(p, 'maxGap', 0.01, 0.5, 0.005).name('max stroke gap');
+  look.add(p, 'wideThreshold', 12, 40, 0.5).name('wide stroke px');
+  look.add(p, 'renderScale', 0.4, 1, 0.05).name('render scale').onChange(() => hooks.onResize());
   look.add(p, 'trails').name('trails');
   look.add(p, 'trailDecay', 0.5, 0.99, 0.005).name('trail decay');
   look.add(p, 'grain', 0, 0.2, 0.001).name('grain');

@@ -4,8 +4,9 @@ import { ParticleSim } from './sim/ParticleSim';
 import { InkRenderer } from './render/InkRenderer';
 import { AudioEngine, type SourceKind } from './audio/AudioEngine';
 import { BeatClock, BeatDetector, BeatEnvelope } from './audio/BeatDetector';
-import { Overlay } from './controls/Overlay';
-import { createDebugPanel } from './controls/DebugPanel';
+import { Overlay, DEFAULT_STREAM } from "./controls/Overlay";
+import { createDebugPanel } from "./controls/DebugPanel";
+import { GpuTimer } from "./render/GpuTimer";
 
 // ---------------------------------------------------------------------------
 // Query flags (used for headless checks): ?autostart=1 skips the gate with the
@@ -54,7 +55,7 @@ function resize(): void {
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  ink.setSize(w, h, maxPixelRatio);
+  ink.setSize(w, h, maxPixelRatio * params.renderScale);
 }
 window.addEventListener('resize', resize);
 resize();
@@ -66,6 +67,9 @@ const detector = new BeatDetector();
 const clock = new BeatClock();
 const envelope = new BeatEnvelope();
 let lastBeatAt = -1;
+let beatCount = 0;
+const beatTimes: number[] = [];
+let steadyStart = 0;
 
 const stats = { fps: 0, particles: sim.count, flux: 0, threshold: 0, env: 0, source: 'silent' };
 
@@ -122,14 +126,18 @@ overlay.setPanelOpen(panelOpen);
 function rebuildParticles(size: number): void {
   params.texSize = size as TexSize;
   sim.allocate(size);
-  ink.buildPoints(sim.count);
-  sim.warmup(params, 300, 1 / 15);
+  ink.buildStrokes(sim.count);
+  sim.warmup(params, 200, 1 / 20);
   stats.particles = sim.count;
+  slowFor = 0;
+  fastFor = 0;
+  smoothedFps = 60;
 }
 
 createDebugPanel(overlay.panel, {
   onTexSize: (size) => rebuildParticles(size),
   onReset: () => rebuildParticles(sim.texSize),
+  onResize: () => resize(),
   stats,
 });
 
@@ -142,14 +150,17 @@ let fastFor = 0;
 let pinnedWarned = false;
 
 function adapt(dt: number): void {
-  if (!params.adaptiveCount) return;
+  if (!params.adaptiveCount || elapsed < 4) return; // startup jank is not a GPU limit
   const idx = TEX_SIZES.indexOf(params.texSize);
   if (smoothedFps < 42) {
     slowFor += dt;
     fastFor = 0;
     if (slowFor > 2) {
       slowFor = 0;
-      if (idx > 0) rebuildParticles(TEX_SIZES[idx - 1]);
+      if (params.renderScale > 0.7) {
+        params.renderScale = Math.max(0.7, params.renderScale - 0.15);
+        resize();
+      } else if (idx > 0) rebuildParticles(TEX_SIZES[idx - 1]);
       else if (!pinnedWarned) {
         pinnedWarned = true;
         console.warn('Ink cloud: already at the smallest particle count and still below target FPS.');
@@ -183,14 +194,21 @@ function updateCamera(t: number): number {
 
 // ---------------------------------------------------------------------------
 // Main loop
-sim.warmup(params, 300, 1 / 15);
+sim.warmup(params, 450, 1 / 30);
 
 if (query.has('debug')) {
   const gl = renderer.getContext();
-  const s = sim.samplePositions(64);
+  const rows = sim.sampleRows(32, 64);
+  const s = rows.pos;
+  const vs = rows.vel;
   let nan = 0;
   let sumR = 0;
   let maxR = 0;
+  let sumV = 0;
+  let maxV = 0;
+  let sumGap = 0;
+  let gaps = 0;
+  let maxGap = 0;
   const n = s.length / 4;
   for (let i = 0; i < n; i++) {
     const x = s[i * 4];
@@ -202,7 +220,21 @@ if (query.has('debug')) {
       sumR += r;
       if (r > maxR) maxR = r;
     }
+    const v = Math.hypot(vs[i * 4], vs[i * 4 + 1], vs[i * 4 + 2]);
+    sumV += v;
+    if (v > maxV) maxV = v;
+    // Neighbour along the strand is the next texel in the same row (64 < strandSize).
+    if (i % 64 < 63 && s[(i + 1) * 4 + 3] < s[i * 4 + 3]) {
+      const g = Math.hypot(s[(i + 1) * 4] - x, s[(i + 1) * 4 + 1] - y, s[(i + 1) * 4 + 2] - z);
+      sumGap += g;
+      gaps++;
+      if (g > maxGap) maxGap = g;
+    }
   }
+  report(
+    `DEBUG_VEL meanV=${(sumV / n).toFixed(3)} maxV=${maxV.toFixed(3)} gaps=${gaps} meanGap=${(sumGap / Math.max(1, gaps)).toFixed(4)} maxGap=${maxGap.toFixed(3)} ` +
+      `w0..3=${[s[3], s[7], s[11], s[15]].map((v) => v.toFixed(3)).join(',')} life0=${vs[3].toFixed(2)}`
+  );
   const dbg = gl.getExtension('WEBGL_debug_renderer_info');
   const gpu = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'unknown';
   report(
@@ -226,7 +258,8 @@ let last = performance.now();
 let elapsed = 0;
 let frames = 0;
 let fpsAccum = 0;
-const bench = query.has('bench');
+const bench = query.has("bench");
+const gpuTimer = bench ? new GpuTimer(renderer) : null;
 let benchFrames = 0;
 let benchStart = 0;
 
@@ -253,7 +286,11 @@ function frame(now: number): void {
       hit = true;
     }
   }
-  if (hit) lastBeatAt = elapsed;
+  if (hit) {
+    lastBeatAt = elapsed;
+    beatCount++;
+    beatTimes.push(elapsed);
+  }
   const env = envelope.update(dt, params);
   stats.flux = detector.flux;
   stats.threshold = detector.threshold;
@@ -267,9 +304,12 @@ function frame(now: number): void {
 
   // --- simulate + render
   renderer.info.reset();
+  gpuTimer?.poll();
+  gpuTimer?.begin("sim");
   sim.step(params, dt, env);
+  gpuTimer?.end();
   const dist = updateCamera(elapsed);
-  if (!query.has('norender')) ink.render(params, sim, camera, dist, env, elapsed);
+  if (!query.has("norender")) ink.render(params, sim, camera, dist, env, elapsed, gpuTimer);
 
   params.noiseStrength = baseNoise;
   params.detailStrength = baseDetail;
@@ -296,17 +336,46 @@ function frame(now: number): void {
       report(
         `BENCH_DONE particles=${sim.count} ${window.innerWidth}x${window.innerHeight}@${maxPixelRatio} frame=${ms.toFixed(2)}ms fps=${(1000 / ms).toFixed(1)} calls=${renderer.info.render.calls}`
       );
-      reportShot(query.get('bench') || 'shot');
+    }
+    if (benchFrames === 600) {
+      steadyStart = now;
+      gpuTimer?.reset();
+    }
+    if (benchFrames === 900) {
+      const steady = (now - steadyStart) / 300;
+      report(`BENCH_STEADY particles=${sim.count} frame=${steady.toFixed(2)}ms fps=${(1000 / steady).toFixed(1)}`);
+      if (gpuTimer) report(gpuTimer.report());
+      const iv = beatTimes.slice(-9).map((t, i, arr) => (i ? (t - arr[i - 1]).toFixed(2) : "")).filter(Boolean);
+      report(`BEAT_INTERVALS ${iv.join(" ")}`);
+      report(
+        `BEAT_STATS beats=${beatCount} over=${elapsed.toFixed(1)}s source=${audio.kind} playing=${audio.playing} mediaTime=${audio.media.currentTime.toFixed(1)} loud=${audio.analysis.loudness.toFixed(3)} flux=${detector.flux.toFixed(4)} thr=${detector.threshold.toFixed(4)}`
+      );
+      reportShot(query.get("bench") || "shot");
     }
   }
 }
 requestAnimationFrame(frame);
 
-// Headless / demo start without a click.
-if (query.get('autostart') === '1') {
+// Headless / demo start without a click: ?autostart=1 (silent) or ?autostart=stream
+// (needs Chrome --autoplay-policy=no-user-gesture-required).
+const auto = query.get("autostart");
+if (auto === "1" || auto === "stream") {
   overlay.gate.hidden = true;
   overlay.hud.hidden = false;
-  audio.stop();
+  if (auto === "stream") {
+    void audio.useStream(query.get("url") || DEFAULT_STREAM).then(
+      () => {
+        detector.reset();
+        stats.source = audio.kind;
+        overlay.setPlaying(audio);
+        report("AUTOSTART_STREAM ok");
+      },
+      (err: unknown) => report(`AUTOSTART_STREAM failed: ${String(err)}`)
+    );
+  } else {
+    audio.stop();
+  }
   if (params.manualBpm) clock.sync(elapsed);
   overlay.setPlaying(audio);
+  if (query.get("hud") === "0") overlay.hud.hidden = true;
 }

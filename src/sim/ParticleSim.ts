@@ -87,7 +87,8 @@ void main() {
   vec3 core = gaussian3(hg2) * uCoreRadius * 0.5;
   vec3 side = normalize(cross(dir, hg3 - 0.5));
   float ribbon = step(hg.x, uRibbonFraction);
-  float lateral = (gm - 0.5 * (uRibbonLines - 1.0)) * uStrandSpread * ribbon * (0.4 + hg.y);
+  // Ribbons spread into parallel lines; the rest stay nearly coincident (one soft, thicker line).
+  float lateral = (gm - 0.5 * (uRibbonLines - 1.0)) * uStrandSpread * mix(0.12, 0.4 + hg.y, ribbon);
   vec3 emitter = core + side * lateral;
   emitter += curlNoise(core * 2.0 + vec3(uTime * 0.05)) * uEmitterDrift;
 
@@ -113,7 +114,9 @@ void main() {
   vec3 q = p * uNoiseScale + vec3(0.0, uTime * uNoiseSpeed, uTime * uNoiseSpeed * 0.37);
   vec3 flow = curlNoise(q) * uNoiseStrength;
   float coreW = exp(-(r * r) / (uDetailRadius * uDetailRadius));
-  flow += curlNoise(p * uDetailScale + vec3(uTime * uNoiseSpeed * 2.3)) * uDetailStrength * coreW * (1.0 + isCore);
+  flow += curlNoise(p * uDetailScale + vec3(uTime * uNoiseSpeed * 2.3)) * uDetailStrength * coreW;
+  // Core groups: a finer, jagged octave that makes the crackly dendritic detail.
+  flow += curlNoise(p * uDetailScale * 3.0 + vec3(7.0, uTime * uNoiseSpeed, 0.0)) * uDetailStrength * 4.0 * isCore;
   float speedVar = (0.5 + hg.z) * (1.0 - 0.75 * isCore);
   flow += dir * uOutwardSpeed * speedVar * (1.0 + uOutwardGain * r);
 
@@ -158,7 +161,7 @@ export class ParticleSim {
         uTime: { value: 0 },
         uDt: { value: 1 / 60 },
         uTexSize: { value: texSize },
-        uStrandSize: { value: 512 },
+        uStrandSize: { value: 256 },
         uRibbonLines: { value: 4 },
         uRibbonFraction: { value: 0.5 },
         uCoreFraction: { value: 0.3 },
@@ -284,6 +287,27 @@ export class ParticleSim {
     const out = new Float32Array(size * size * 4);
     this.renderer.readRenderTargetPixels(this.rtA, 0, 0, size, size, out);
     return out;
+  }
+
+  sampleVelocities(size = 64): Float32Array {
+    const out = new Float32Array(size * size * 4);
+    this.renderer.readRenderTargetPixels(this.rtA, 0, 0, size, size, out, undefined, 1);
+    return out;
+  }
+
+  /** Read `rows` rows of 64 consecutive particles spread over the whole texture (debugging). */
+  sampleRows(rows = 32, width = 64): { pos: Float32Array; vel: Float32Array } {
+    const pos = new Float32Array(rows * width * 4);
+    const vel = new Float32Array(rows * width * 4);
+    const rowBuf = new Float32Array(width * 4);
+    for (let i = 0; i < rows; i++) {
+      const y = Math.floor(((i + 0.5) / rows) * this.texSize);
+      this.renderer.readRenderTargetPixels(this.rtA, 0, y, width, 1, rowBuf);
+      pos.set(rowBuf, i * width * 4);
+      this.renderer.readRenderTargetPixels(this.rtA, 0, y, width, 1, rowBuf, undefined, 1);
+      vel.set(rowBuf, i * width * 4);
+    }
+    return { pos, vel };
   }
 
   dispose(): void {

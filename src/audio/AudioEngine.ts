@@ -180,8 +180,9 @@ export class AudioEngine {
       sum += lin * lin;
       if (i >= highStart) highSum += lin * lin;
     }
-    a.loudness = Math.min(1, Math.sqrt(sum / n) * 40);
-    a.high = Math.min(1, Math.sqrt(highSum / (n - highStart)) * 160);
+    // Rough perceptual scaling: a normal mix sits around 0.3 to 0.7.
+    a.loudness = Math.min(1, Math.sqrt(sum / n) * 300);
+    a.high = Math.min(1, Math.sqrt(highSum / (n - highStart)) * 1200);
     return a;
   }
 }
