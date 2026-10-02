@@ -231,6 +231,7 @@ uniform float uGrain;
 uniform float uVignette;
 uniform float uWarmth;
 uniform float uTime;
+uniform float uInvert; // 0 = ink on paper, 1 = paper on ink (eased on the CPU)
 uniform vec2 uResolution;
 layout(location = 0) out vec4 oColor;
 ${HASH_GLSL}
@@ -248,6 +249,7 @@ void main() {
   vec3 col = paper * (1.0 - ink);
   float g = hash12(gl_FragCoord.xy + fract(uTime * 7.31) * 977.0) - 0.5;
   col += g * uGrain;
+  col = mix(col, 1.0 - col, uInvert);
   oColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 `;
@@ -369,6 +371,7 @@ export class InkRenderer {
         uVignette: { value: 0.5 },
         uWarmth: { value: 0.01 },
         uTime: { value: 0 },
+        uInvert: { value: 0 },
         uResolution: { value: new THREE.Vector2(1, 1) },
       },
     });
@@ -447,7 +450,8 @@ export class InkRenderer {
     camDist: number,
     beatEnv: number,
     time: number,
-    timer: GpuTimer | null = null
+    timer: GpuTimer | null = null,
+    invert = 0
   ): void {
     const r = this.renderer;
 
@@ -503,6 +507,7 @@ export class InkRenderer {
     c.uVignette.value = p.vignette;
     c.uWarmth.value = p.paperWarmth;
     c.uTime.value = time;
+    c.uInvert.value = invert;
     this.quad.material = this.compositeMat;
     r.setRenderTarget(null);
     r.render(this.quadScene, this.quadCam);

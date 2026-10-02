@@ -16,7 +16,7 @@
 
 ---
 
-**Tap** and the music starts: the stream buffers from the moment the page opens where the browser allows it (iOS Safari waits for the touch), and the first touch is the permission browsers require. A small pulse at the top shows while the network is behind. **Press and hold** and the ink gathers around your finger; keep holding for two seconds and the controls appear. From there you can change the sound source, switch mode, open the settings, or hide everything again (`H` on a keyboard, the eye button on a phone). `Space` pauses.
+**Tap** and the music starts: the stream buffers from the moment the page opens where the browser allows it (iOS Safari waits for the touch), and the first touch is the permission browsers require. A small pulse at the top shows while the network is behind. **Press and hold** and the ink gathers around your finger; keep holding for two seconds and the controls appear. From there you can change the sound source, switch mode, invert the colours (the sun button, or `I`), open the settings, or hide everything again (`H` on a keyboard, the eye button on a phone). `Space` pauses.
 
 | Gesture | Does |
 | --- | --- |
@@ -82,7 +82,7 @@ bun run dev        # http://localhost:5190
 bun run build      # dist/, deployed to GitHub Pages by the workflow
 ```
 
-Useful URL flags: `?source=silent` opens without the stream, `?mode=strings` starts in strings mode, `?hud=1` shows the controls at once, `?panel=1` shows them with the settings open, `?tex=512` sets the particle texture side (512² = 262k, 1024² = 1M), `?bpm=120` runs the manual clock, `?touch=0.3,0.5` holds a virtual finger, `?p.<param>=<value>` presets any tunable from `src/params.ts`, `?bench=<name>&debug=1` prints GPU pass times and beat statistics.
+Useful URL flags: `?invert=1` starts with white ink on black, `?source=silent` opens without the stream, `?mode=strings` starts in strings mode, `?hud=1` shows the controls at once, `?panel=1` shows them with the settings open, `?tex=512` sets the particle texture side (512² = 262k, 1024² = 1M), `?bpm=120` runs the manual clock, `?touch=0.3,0.5` holds a virtual finger, `?p.<param>=<value>` presets any tunable from `src/params.ts`, `?bench=<name>&debug=1` prints GPU pass times and beat statistics.
 
 ## Performance
 

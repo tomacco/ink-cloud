@@ -65,6 +65,7 @@ export const params = {
   grain: 0.045,
   vignette: 0.55,
   paperWarmth: 0.012,
+  invert: false, // white ink on black paper
 
   // --- camera -----------------------------------------------------------
   orbitSpeed: 0.035, // rad/s
