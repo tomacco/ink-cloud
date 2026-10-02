@@ -52,6 +52,7 @@ export class Overlay {
   readonly hud = document.getElementById('hud') as HTMLDivElement;
   readonly panel = document.getElementById('panel') as HTMLElement;
   private hint = document.getElementById('hint') as HTMLDivElement;
+  private loading = document.getElementById('loading') as HTMLDivElement;
   private source = document.getElementById('source') as HTMLElement & { value: string };
   private sourceNote = document.getElementById('source-note') as HTMLParagraphElement;
   private streamUrl = document.getElementById('stream-url') as HTMLInputElement;
@@ -159,6 +160,15 @@ export class Overlay {
 
   setPanelOpen(open: boolean): void {
     this.panel.classList.toggle('closed', !open);
+  }
+
+  setHint(text: string): void {
+    this.hint.textContent = text;
+  }
+
+  setLoading(on: boolean): void {
+    if (this.loading.hidden === !on) return;
+    this.loading.hidden = !on;
   }
 
   setPlaying(audio: AudioEngine): void {

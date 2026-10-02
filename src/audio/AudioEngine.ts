@@ -30,6 +30,7 @@ export class AudioEngine {
   private linBuf: Float32Array<ArrayBuffer>;
   readonly analysis: Analysis;
   onStateChange: (() => void) | null = null;
+  private wantPlaying = false;
 
   constructor() {
     this.ctx = new AudioContext({ latencyHint: 'interactive' });
@@ -51,6 +52,7 @@ export class AudioEngine {
     };
     for (const ev of ['play', 'pause', 'ended', 'error', 'waiting', 'playing', 'loadedmetadata'])
       this.media.addEventListener(ev, () => this.onStateChange?.());
+    this.media.addEventListener('error', () => (this.wantPlaying = false));
   }
 
   get isLive(): boolean {
@@ -84,15 +86,47 @@ export class AudioEngine {
 
   /** Progressive playback of a remote URL. The server must send CORS headers. */
   async useStream(url: string): Promise<void> {
+    this.prepareStream(url);
+    this.wantPlaying = true;
+    await this.resume();
+    await this.media.play();
+    this.onStateChange?.();
+  }
+
+  /**
+   * Point the element at a URL and let it buffer, without playing: browsers
+   * refuse audio before a gesture, but they do allow the download to begin,
+   * so the first tap starts a stream that is already ahead of the needle.
+   */
+  prepareStream(url: string): void {
     this.disconnectAll();
     this.kind = 'stream';
     const node = this.ensureMediaNode();
     node.connect(this.analyser);
     node.connect(this.ctx.destination);
     this.media.src = url;
-    await this.resume();
-    await this.media.play();
+    this.media.load();
+    this.wantPlaying = false;
     this.onStateChange?.();
+  }
+
+  /** Start a prepared stream. Call synchronously inside a user gesture handler. */
+  startPrepared(): void {
+    if (this.kind !== 'stream' || !this.media.paused) return;
+    void this.ctx.resume();
+    this.wantPlaying = true;
+    void this.media.play().catch((err: unknown) => {
+      this.wantPlaying = false;
+      console.warn('stream start refused', err);
+      this.onStateChange?.();
+    });
+    this.onStateChange?.();
+  }
+
+  /** True while a stream or file we want to hear has not buffered enough to play. */
+  get buffering(): boolean {
+    if (this.kind !== 'stream' && this.kind !== 'file') return false;
+    return this.wantPlaying && !this.media.error && this.media.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
   }
 
   async useFile(file: File): Promise<void> {
@@ -102,6 +136,7 @@ export class AudioEngine {
     node.connect(this.analyser);
     node.connect(this.ctx.destination);
     this.media.src = URL.createObjectURL(file);
+    this.wantPlaying = true;
     await this.resume();
     await this.media.play();
     this.onStateChange?.();
@@ -148,14 +183,21 @@ export class AudioEngine {
 
   stop(): void {
     this.disconnectAll();
+    this.wantPlaying = false;
     this.kind = 'none';
     this.onStateChange?.();
   }
 
   togglePlay(): void {
     if (this.isLive) return;
-    if (this.media.paused) void this.media.play();
-    else this.media.pause();
+    if (this.media.paused) {
+      this.wantPlaying = true;
+      void this.ctx.resume();
+      void this.media.play();
+    } else {
+      this.wantPlaying = false;
+      this.media.pause();
+    }
   }
 
   /** Pull one frame of spectrum data. Call once per animation frame. */
