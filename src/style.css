@@ -281,3 +281,54 @@ body {
   0%, 100% { transform: scale(0.5); opacity: 0.25; }
   50% { transform: scale(1.1); opacity: 1; }
 }
+
+/* ---- inverted: paper on ink ------------------------------------------- */
+body.inverted {
+  background: #0b0b0c;
+  color: #ececea;
+  color-scheme: dark;
+}
+
+body.inverted #hint,
+body.inverted #loading {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+body.inverted #loading span {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+body.inverted .track,
+body.inverted .fps {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+body.inverted .beat {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+body.inverted .beat.on {
+  background: #f2f2f0;
+}
+
+body.inverted .gate-card .lede,
+body.inverted .gate-card .note {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+body.inverted .gate-card .text {
+  background: rgba(0, 0, 0, 0.35);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #eee;
+}
+
+body.inverted #panel .lil-gui {
+  --text-color: #ececea;
+  --title-background-color: rgba(255, 255, 255, 0.08);
+  --title-text-color: #ececea;
+  --widget-color: rgba(255, 255, 255, 0.12);
+  --hover-color: rgba(255, 255, 255, 0.18);
+  --focus-color: rgba(255, 255, 255, 0.24);
+  --number-color: #ececea;
+  --string-color: #ececea;
+}

@@ -83,6 +83,7 @@ export function createDebugPanel(container: HTMLElement, hooks: DebugHooks): GUI
   look.add(p, 'grain', 0, 0.2, 0.001).name('grain');
   look.add(p, 'vignette', 0, 1, 0.01).name('vignette');
   look.add(p, 'paperWarmth', -0.05, 0.08, 0.001).name('paper warmth');
+  look.add(p, 'invert').name('invert colours').listen();
 
   const mode = gui.addFolder('Mode');
   mode.add(p, 'mode', { ink: 0, strings: 1 }).name('mode').listen();

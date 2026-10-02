@@ -49,6 +49,10 @@ for (const [k, v] of query) {
   (params as Record<string, unknown>)[name] = typeof cur === 'boolean' ? v === 'true' || v === '1' : Number(v);
 }
 if (query.get('mode') === 'strings') params.mode = 1;
+if (query.get('invert') === '1' || query.get('invert') === 'true') params.invert = true;
+// The inversion eases over ~0.4 s; the page palette flips with the parameter so the
+// panel's toggle, the key and the button all stay in sync.
+let invertAmount = params.invert ? 1 : 0;
 if (query.has('bpm')) {
   params.manualBpm = true;
   params.bpm = Number(query.get('bpm')) || params.bpm;
@@ -119,6 +123,9 @@ const overlay = new Overlay({
   },
   onToggleMode: () => {
     params.mode = params.mode > 0.5 ? 0 : 1;
+  },
+  onToggleInvert: () => {
+    params.invert = !params.invert;
   },
 });
 audio.onStateChange = () => overlay.setPlaying(audio);
@@ -511,7 +518,12 @@ function frame(now: number): void {
   gpuTimer?.begin('sim');
   sim.step(params, dt, env, touch.w > 0.001 ? touch : null);
   gpuTimer?.end();
-  if (!query.has('norender')) ink.render(params, sim, camera, dist, env, elapsed, gpuTimer);
+  invertAmount += ((params.invert ? 1 : 0) - invertAmount) * Math.min(1, dt * 7);
+  if (document.body.classList.contains('inverted') !== params.invert) {
+    document.body.classList.toggle('inverted', params.invert);
+    overlay.setInverted(params.invert);
+  }
+  if (!query.has('norender')) ink.render(params, sim, camera, dist, env, elapsed, gpuTimer, invertAmount);
 
   params.noiseStrength = baseNoise;
   params.detailStrength = baseDetail;

@@ -45,6 +45,7 @@ export interface OverlayHandlers {
   onTogglePlay: () => void;
   onToggleSettings: () => void;
   onToggleMode: () => void;
+  onToggleInvert: () => void;
 }
 
 export class Overlay {
@@ -80,15 +81,18 @@ export class Overlay {
     document.getElementById('change-source')!.addEventListener('click', () => this.showGate());
     document.getElementById('settings')!.addEventListener('click', () => handlers.onToggleSettings());
     document.getElementById('mode')!.addEventListener('click', () => handlers.onToggleMode());
+    document.getElementById('invert')!.addEventListener('click', () => handlers.onToggleInvert());
     document.getElementById('hide')!.addEventListener('click', () => this.setHidden(true));
     window.addEventListener('keydown', (e) => {
-      if (e.target instanceof HTMLInputElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.repeat) return;
       if (e.key === 'h' || e.key === 'H') this.setHidden(!this.hidden);
       if (e.key === ' ') {
         e.preventDefault();
         handlers.onTogglePlay();
       }
-      if ((e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey && !e.altKey && this.gate.hidden) handlers.onToggleMode();
+      const plain = !e.ctrlKey && !e.metaKey && !e.altKey && this.gate.hidden;
+      if ((e.key === 'm' || e.key === 'M') && plain) handlers.onToggleMode();
+      if ((e.key === 'i' || e.key === 'I') && plain) handlers.onToggleInvert();
       if (e.key === 'Escape') {
         if (!this.gate.hidden) this.gate.hidden = true;
         else if (this.hidden) this.setHidden(false);
@@ -160,6 +164,10 @@ export class Overlay {
 
   setPanelOpen(open: boolean): void {
     this.panel.classList.toggle('closed', !open);
+  }
+
+  setInverted(on: boolean): void {
+    document.getElementById('invert')!.setAttribute('aria-pressed', on ? 'true' : 'false');
   }
 
   setHint(text: string): void {
