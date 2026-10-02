@@ -54,6 +54,11 @@ uniform float uStrandSpread;
 uniform float uEmitterDrift;
 uniform float uBeatEnv;
 uniform float uAttractor;
+uniform float uMode;        // 0 = ink (free emitters), 1 = strings (ruled surfaces)
+uniform float uStringSpeed;
+uniform float uStringDrift;
+uniform float uStringSpring;
+uniform float uLinesPerSurface;
 uniform vec4 uTouch;        // xyz = finger in world space, w = hold strength 0..1
 uniform float uTouchStrength;
 uniform float uSeed;
@@ -65,6 +70,40 @@ vec3 gaussian3(vec3 u) {
   float a1 = 6.2831853 * u.y;
   float r2 = sqrt(-2.0 * log(max(u.z, 1e-6)));
   return vec3(r1 * cos(a1), r1 * sin(a1), r2 * cos(a1 * 1.7 + u.z * 9.0));
+}
+
+// ---- strings mode: ruled surfaces between base curves ---------------------
+// Base vertices sit on a jittered cube. A curve is a quadratic Bezier through
+// three vertices, or a single vertex (then every string of that surface meets
+// there: a fan). A surface pairs two curves; a string joins the points at the
+// same parameter u on both. Two point-curves make all strings coincide: a dark
+// base edge, like the string-art cover.
+vec3 baseVertex(float i) {
+  float c = mod(i, 8.0);
+  vec3 corner = vec3(mod(c, 2.0), mod(floor(c / 2.0), 2.0), floor(c / 4.0)) * 2.0 - 1.0;
+  vec3 j = hash31(i * 2.71 + 41.0 + uSeed) - 0.5;
+  return corner * 0.7 + j * 0.5;
+}
+vec3 baseCurve(float c, float u) {
+  vec3 h = hash31(c * 1.93 + 23.0 + uSeed);
+  vec3 p0 = baseVertex(floor(h.x * 8.0));
+  vec3 p1 = baseVertex(floor(h.y * 8.0));
+  vec3 p2 = baseVertex(floor(h.z * 8.0));
+  float isPoint = step(hash11(c * 5.17 + 3.0 + uSeed), 0.3);
+  p1 = mix(p1, p0, isPoint);
+  p2 = mix(p2, p0, isPoint);
+  float w = 1.0 - u;
+  return p0 * w * w + p1 * 2.0 * w * u + p2 * u * u;
+}
+vec3 stringTarget(float group, float gm, float member) {
+  float s = floor(group / uLinesPerSurface);
+  float l = group - s * uLinesPerSurface;
+  float u = fract((l + 0.5 + gm / uRibbonLines) / uLinesPerSurface + uTime * uStringSpeed * (0.5 + hash11(s * 7.3 + uSeed)));
+  float f = (member + 0.5) / uStrandSize;
+  vec3 a = baseCurve(s * 2.0, u);
+  vec3 b = baseCurve(s * 2.0 + 1.0, u);
+  vec3 t = mix(a, b, f);
+  return t + curlNoise(t * 1.3 + vec3(uTime * 0.05)) * uStringDrift;
 }
 
 void main() {
@@ -93,19 +132,21 @@ void main() {
   float lateral = (gm - 0.5 * (uRibbonLines - 1.0)) * uStrandSpread * mix(0.12, 0.4 + hg.y, ribbon);
   vec3 emitter = core + side * lateral;
   emitter += curlNoise(core * 2.0 + vec3(uTime * 0.05)) * uEmitterDrift;
+  vec3 target = emitter;
+  if (uMode > 0.5) target = stringTarget(group, gm, member);
 
   float life = vel.w;
   if (life <= 0.0) {
     // First step: stagger births so the streakline is complete from the start.
     life = mix(mix(uLifeMin, uLifeMax, hg2.z * hg2.z), uCoreLife * (0.5 + hg2.z), isCore);
     pos.w = uTime - phase * life;
-    pos.xyz = emitter;
+    pos.xyz = target;
     vel.xyz = dir * uOutwardSpeed * 0.5;
   }
   if (uTime - pos.w >= life) {
     // Re-emit exactly one life later: keeps the spacing along the line even.
     pos.w += life * floor((uTime - pos.w) / life);
-    pos.xyz = emitter;
+    pos.xyz = target;
     vel.xyz = dir * uOutwardSpeed * 0.5;
   }
 
@@ -139,6 +180,11 @@ void main() {
   }
 
   p += v * uDt;
+  // Strings: spring back onto the ruled surface, so beats and touch displace, then release.
+  if (uMode > 0.5) {
+    p = mix(p, target, min(1.0, uStringSpring * uDt));
+    v *= 1.0 - min(1.0, uStringSpring * uDt);
+  }
 
   oPos = vec4(p, pos.w);
   oVel = vec4(v, life);
@@ -192,6 +238,11 @@ export class ParticleSim {
         uEmitterDrift: { value: 0.05 },
         uBeatEnv: { value: 0 },
         uAttractor: { value: 2 },
+        uMode: { value: 0 },
+        uStringSpeed: { value: 0.02 },
+        uStringDrift: { value: 0.08 },
+        uStringSpring: { value: 4 },
+        uLinesPerSurface: { value: 32 },
         uTouch: { value: new THREE.Vector4(0, 0, 0, 0) },
         uTouchStrength: { value: 3 },
         uSeed: { value: this.seed },
@@ -263,6 +314,11 @@ export class ParticleSim {
     if (touch) (u.uTouch.value as THREE.Vector4).copy(touch);
     else (u.uTouch.value as THREE.Vector4).set(0, 0, 0, 0);
     u.uTouchStrength.value = p.touchStrength;
+    u.uMode.value = p.mode;
+    u.uStringSpeed.value = p.stringSpeed;
+    u.uStringDrift.value = p.stringDrift;
+    u.uStringSpring.value = p.stringSpring;
+    u.uLinesPerSurface.value = p.linesPerSurface;
     this.time += dt;
     u.uTime.value = this.time;
     u.uDt.value = dt;

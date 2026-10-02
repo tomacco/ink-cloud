@@ -38,6 +38,13 @@ export const params = {
   audioTurbulence: 0.5, // loudness -> noise strength modulation
   audioDetail: 0.6, // high band -> detail octave modulation
 
+  // --- mode -------------------------------------------------------------
+  mode: 0, // 0 = ink (free emitters), 1 = strings (ruled surfaces between base curves)
+  stringSpeed: 0.02, // how fast strings sweep along their base curves
+  stringDrift: 0.08, // curl displacement of the surfaces
+  stringSpring: 4, // how fast particles return to their string (1/s)
+  linesPerSurface: 32,
+
   // --- touch ------------------------------------------------------------
   touchStrength: 3.0, // pull toward the finger while pressing
   touchHold: 2.0, // seconds of holding before the controls appear

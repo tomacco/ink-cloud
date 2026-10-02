@@ -48,6 +48,7 @@ for (const [k, v] of query) {
   const cur = params[name];
   (params as Record<string, unknown>)[name] = typeof cur === 'boolean' ? v === 'true' || v === '1' : Number(v);
 }
+if (query.get('mode') === 'strings') params.mode = 1;
 if (query.has('bpm')) {
   params.manualBpm = true;
   params.bpm = Number(query.get('bpm')) || params.bpm;
@@ -115,6 +116,9 @@ const overlay = new Overlay({
   onToggleSettings: () => {
     panelOpen = !panelOpen;
     overlay.setPanelOpen(panelOpen);
+  },
+  onToggleMode: () => {
+    params.mode = params.mode > 0.5 ? 0 : 1;
   },
 });
 audio.onStateChange = () => overlay.setPlaying(audio);

@@ -65,6 +65,7 @@ uniform float uBeatEnv;
 uniform float uBeatSqueeze;
 uniform float uMaxGap;
 uniform float uWideThreshold;
+uniform float uMode;
 uniform vec2 uResolution;
 ${HASH_GLSL}
 
@@ -94,6 +95,7 @@ void main() {
   float life = max(velA.w, 1e-3);
   float u = clamp((uTime - posA.w) / life, 0.0, 1.0);
   float fade = smoothstep(0.0, 0.02, u) * (1.0 - smoothstep(0.55, 1.0, u));
+  fade = mix(fade, 1.0, uMode); // strings do not taper
 
   vec4 mvA = uModelView * vec4(squeeze(posA.xyz, vary), 1.0);
   float viewZ = -mvA.z;
@@ -311,6 +313,7 @@ export class InkRenderer {
         uBeatSqueeze: { value: 0 },
         uMaxGap: { value: 0.12 },
         uWideThreshold: { value: 5 },
+        uMode: { value: 0 },
         uResolution: { value: new THREE.Vector2(1, 1) },
       },
     });
@@ -472,6 +475,7 @@ export class InkRenderer {
     u.uBeatSqueeze.value = p.beatSqueeze;
     u.uMaxGap.value = p.maxGap;
     u.uWideThreshold.value = p.wideThreshold;
+    u.uMode.value = p.mode;
     r.setRenderTarget(this.strokeData);
     r.render(this.prepassScene, this.quadCam);
     timer?.end();
