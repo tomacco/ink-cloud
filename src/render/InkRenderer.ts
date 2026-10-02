@@ -246,10 +246,12 @@ void main() {
   vec3 edge = vec3(0.885 + uWarmth, 0.875 + uWarmth * 0.5, 0.86);
   paper = mix(paper, edge, vig);
 
-  vec3 col = paper * (1.0 - ink);
+  // Inverted: black paper that still darkens toward the edges, white ink.
+  vec3 paperInv = vec3(0.045) * (1.0 - vig * 0.8);
+  vec3 ground = mix(paper, paperInv, uInvert);
+  vec3 col = ground * (1.0 - ink) + vec3(uInvert) * ink;
   float g = hash12(gl_FragCoord.xy + fract(uTime * 7.31) * 977.0) - 0.5;
   col += g * uGrain;
-  col = mix(col, 1.0 - col, uInvert);
   oColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 `;
