@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host --port 5190",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --port 5191"
+    "preview": "vite preview --port 5191",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "amazing-glass": "github:tomacco/amazing-glass",

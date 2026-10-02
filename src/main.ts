@@ -4,15 +4,22 @@ import { ParticleSim } from './sim/ParticleSim';
 import { InkRenderer } from './render/InkRenderer';
 import { AudioEngine, type SourceKind } from './audio/AudioEngine';
 import { BeatClock, BeatDetector, BeatEnvelope } from './audio/BeatDetector';
-import { Overlay, DEFAULT_STREAM } from "./controls/Overlay";
-import { createDebugPanel } from "./controls/DebugPanel";
-import { GpuTimer } from "./render/GpuTimer";
+import { Overlay, DEFAULT_STREAM } from './controls/Overlay';
+import { createDebugPanel } from './controls/DebugPanel';
+import { GpuTimer } from './render/GpuTimer';
 
 // ---------------------------------------------------------------------------
-// Query flags (used for headless checks): ?autostart=1 skips the gate with the
-// silent source, ?tex=512 sets the particle texture side, ?bpm=120 enables the
-// manual clock, ?panel=0 hides the settings panel, ?bench=1 prints frame stats.
+// The page starts immediately in silent mode. A long press gathers ink around
+// the finger and, after `touchHold` seconds, reveals the controls.
+//
+// Query flags (for tests and deep links): ?autostart=stream plays the default
+// stream (needs an autoplay-permitted browser), ?hud=1 shows the controls at
+// once, ?panel=1 opens settings, ?tex=512 sets the particle texture side,
+// ?bpm=120 enables the manual clock, ?p.<param>=<value> presets any tunable,
+// ?touch=0.3,0.5 holds a virtual finger at that screen fraction,
+// ?bench=<name>&debug=1 prints GPU pass times and beat stats.
 const query = new URLSearchParams(location.search);
+const isMobile = navigator.maxTouchPoints > 0 && Math.min(window.innerWidth, window.innerHeight) <= 900;
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({
@@ -24,10 +31,11 @@ const renderer = new THREE.WebGLRenderer({
 });
 renderer.autoClear = false;
 renderer.setClearColor(0x000000, 1);
-const maxPixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+const maxPixelRatio = Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : 2);
 renderer.setPixelRatio(maxPixelRatio);
 renderer.info.autoReset = false;
 
+if (isMobile) params.texSize = 512; // phones start at 262k and adapt from there
 if (query.has('tex')) {
   const t = Number(query.get('tex')) as TexSize;
   if ((TEX_SIZES as readonly number[]).includes(t)) params.texSize = t;
@@ -108,19 +116,17 @@ const overlay = new Overlay({
     panelOpen = !panelOpen;
     overlay.setPanelOpen(panelOpen);
   },
-  onToggleHidden: () => {
-    /* nothing extra: the HUD animates itself */
-  },
 });
 audio.onStateChange = () => overlay.setPlaying(audio);
 audio.media.addEventListener('error', () => {
   const e = audio.media.error;
   console.warn('audio element error', e?.code, e?.message);
 });
+overlay.setPlaying(audio);
 
 // ---------------------------------------------------------------------------
 // Debug panel
-let panelOpen = query.get('panel') !== '0';
+let panelOpen = query.get('panel') === '1';
 overlay.setPanelOpen(panelOpen);
 
 function rebuildParticles(size: number): void {
@@ -142,8 +148,9 @@ createDebugPanel(overlay.panel, {
 });
 
 // ---------------------------------------------------------------------------
-// Adaptive particle count: step down one texture size when the smoothed FPS
-// stays below 42 for two seconds, step back up above 57 for six seconds.
+// Adaptive quality: when the smoothed FPS stays below 42 for two seconds, lower
+// the internal render scale first, then the particle count; step the count back
+// up after six seconds above 57.
 let smoothedFps = 60;
 let slowFor = 0;
 let fastFor = 0;
@@ -189,7 +196,74 @@ function updateCamera(t: number): number {
   camPos.set(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el)).multiplyScalar(dist);
   camera.position.copy(camPos);
   camera.lookAt(0, 0, 0);
+  camera.updateMatrixWorld();
   return dist;
+}
+
+// ---------------------------------------------------------------------------
+// Press and hold: the finger projects onto the plane through the core that
+// faces the camera; ink is pulled there while pressing, and the controls
+// appear once the press has lasted `touchHold` seconds.
+const touch = new THREE.Vector4(0, 0, 0, 0);
+const raycaster = new THREE.Raycaster();
+const touchPlane = new THREE.Plane();
+const ndc = new THREE.Vector2();
+const viewDir = new THREE.Vector3();
+const hitPoint = new THREE.Vector3();
+let pressing = false;
+let pressStart = 0;
+let pressX = 0;
+let pressY = 0;
+let pressId = -1; // the pointer that owns the press; other fingers are ignored
+
+function projectTouch(): void {
+  ndc.set((pressX / window.innerWidth) * 2 - 1, -(pressY / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  camera.getWorldDirection(viewDir);
+  touchPlane.setFromNormalAndCoplanarPoint(viewDir, new THREE.Vector3(0, 0, 0));
+  if (raycaster.ray.intersectPlane(touchPlane, hitPoint)) touch.set(hitPoint.x, hitPoint.y, hitPoint.z, touch.w);
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 && e.pointerType === 'mouse') return;
+  if (pressing) return; // a second finger must not restart the hold or move the attractor
+  pressId = e.pointerId;
+  pressing = true;
+  pressStart = elapsed;
+  pressX = e.clientX;
+  pressY = e.clientY;
+  canvas.setPointerCapture(e.pointerId);
+  void audio.resume(); // first gesture unlocks the AudioContext for later
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!pressing || e.pointerId !== pressId) return;
+  pressX = e.clientX;
+  pressY = e.clientY;
+});
+const release = (e: PointerEvent): void => {
+  if (e.pointerId !== pressId) return;
+  pressing = false;
+  pressId = -1;
+};
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+canvas.addEventListener('lostpointercapture', release);
+
+if (query.has('touch')) {
+  const [fx, fy] = (query.get('touch') || '0.5,0.5').split(',').map(Number);
+  pressX = fx * window.innerWidth;
+  pressY = fy * window.innerHeight;
+  pressing = true;
+}
+
+function updateTouch(dt: number): void {
+  const target = pressing ? 1 : 0;
+  touch.w += (target - touch.w) * Math.min(1, dt * 6);
+  if (pressing) {
+    projectTouch();
+    // Every long press brings the controls back; this is the only way on a phone.
+    if (overlay.hidden && elapsed - pressStart >= params.touchHold) overlay.reveal();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +313,7 @@ if (query.has('debug')) {
   const gpu = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'unknown';
   report(
     `DEBUG_SIM gpu="${gpu}" webgl2=${renderer.capabilities.isWebGL2} floatBlend=${renderer.extensions.has('EXT_float_blend')} ` +
-      `maxPointSize=${gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)} samples=${n} nan=${nan} meanR=${(sumR / Math.max(1, n - nan)).toFixed(3)} maxR=${maxR.toFixed(3)} simTime=${sim.time.toFixed(2)}`
+      `mobile=${isMobile} dpr=${maxPixelRatio} samples=${n} nan=${nan} meanR=${(sumR / Math.max(1, n - nan)).toFixed(3)} maxR=${maxR.toFixed(3)} simTime=${sim.time.toFixed(2)}`
   );
 }
 
@@ -258,7 +332,7 @@ let last = performance.now();
 let elapsed = 0;
 let frames = 0;
 let fpsAccum = 0;
-const bench = query.has("bench");
+const bench = query.has('bench');
 const gpuTimer = bench ? new GpuTimer(renderer) : null;
 let benchFrames = 0;
 let benchStart = 0;
@@ -303,13 +377,14 @@ function frame(now: number): void {
   params.detailStrength = baseDetail * (1 + params.audioDetail * a.high);
 
   // --- simulate + render
+  const dist = updateCamera(elapsed);
+  updateTouch(dt);
   renderer.info.reset();
   gpuTimer?.poll();
-  gpuTimer?.begin("sim");
-  sim.step(params, dt, env);
+  gpuTimer?.begin('sim');
+  sim.step(params, dt, env, touch.w > 0.001 ? touch : null);
   gpuTimer?.end();
-  const dist = updateCamera(elapsed);
-  if (!query.has("norender")) ink.render(params, sim, camera, dist, env, elapsed, gpuTimer);
+  if (!query.has('norender')) ink.render(params, sim, camera, dist, env, elapsed, gpuTimer);
 
   params.noiseStrength = baseNoise;
   params.detailStrength = baseDetail;
@@ -345,37 +420,30 @@ function frame(now: number): void {
       const steady = (now - steadyStart) / 300;
       report(`BENCH_STEADY particles=${sim.count} frame=${steady.toFixed(2)}ms fps=${(1000 / steady).toFixed(1)}`);
       if (gpuTimer) report(gpuTimer.report());
-      const iv = beatTimes.slice(-9).map((t, i, arr) => (i ? (t - arr[i - 1]).toFixed(2) : "")).filter(Boolean);
-      report(`BEAT_INTERVALS ${iv.join(" ")}`);
+      const iv = beatTimes.slice(-9).map((t, i, arr) => (i ? (t - arr[i - 1]).toFixed(2) : '')).filter(Boolean);
+      report(`BEAT_INTERVALS ${iv.join(' ')}`);
       report(
         `BEAT_STATS beats=${beatCount} over=${elapsed.toFixed(1)}s source=${audio.kind} playing=${audio.playing} mediaTime=${audio.media.currentTime.toFixed(1)} loud=${audio.analysis.loudness.toFixed(3)} flux=${detector.flux.toFixed(4)} thr=${detector.threshold.toFixed(4)}`
       );
-      reportShot(query.get("bench") || "shot");
+      reportShot(query.get('bench') || 'shot');
     }
   }
 }
 requestAnimationFrame(frame);
 
-// Headless / demo start without a click: ?autostart=1 (silent) or ?autostart=stream
-// (needs Chrome --autoplay-policy=no-user-gesture-required).
-const auto = query.get("autostart");
-if (auto === "1" || auto === "stream") {
-  overlay.gate.hidden = true;
-  overlay.hud.hidden = false;
-  if (auto === "stream") {
-    void audio.useStream(query.get("url") || DEFAULT_STREAM).then(
-      () => {
-        detector.reset();
-        stats.source = audio.kind;
-        overlay.setPlaying(audio);
-        report("AUTOSTART_STREAM ok");
-      },
-      (err: unknown) => report(`AUTOSTART_STREAM failed: ${String(err)}`)
-    );
-  } else {
-    audio.stop();
-  }
-  if (params.manualBpm) clock.sync(elapsed);
-  overlay.setPlaying(audio);
-  if (query.get("hud") === "0") overlay.hud.hidden = true;
+// ---------------------------------------------------------------------------
+// Deep links and test modes
+if (query.get('hud') === '1' || panelOpen) overlay.reveal();
+if (query.get('autostart') === 'stream') {
+  // Needs an autoplay-permitted browser (Chrome --autoplay-policy=no-user-gesture-required).
+  void audio.useStream(query.get('url') || DEFAULT_STREAM).then(
+    () => {
+      detector.reset();
+      stats.source = audio.kind;
+      overlay.setPlaying(audio);
+      report('AUTOSTART_STREAM ok');
+    },
+    (err: unknown) => report(`AUTOSTART_STREAM failed: ${String(err)}`)
+  );
 }
+if (params.manualBpm) clock.sync(elapsed);

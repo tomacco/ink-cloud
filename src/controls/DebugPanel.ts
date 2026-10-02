@@ -84,11 +84,15 @@ export function createDebugPanel(container: HTMLElement, hooks: DebugHooks): GUI
   look.add(p, 'vignette', 0, 1, 0.01).name('vignette');
   look.add(p, 'paperWarmth', -0.05, 0.08, 0.001).name('paper warmth');
 
+  const touch = gui.addFolder('Touch');
+  touch.add(p, 'touchStrength', 0, 10, 0.1).name('finger pull');
+  touch.add(p, 'touchHold', 0.5, 5, 0.1).name('hold to reveal (s)');
+
   const cam = gui.addFolder('Camera');
   cam.add(p, 'orbitSpeed', -0.3, 0.3, 0.005).name('orbit speed');
   cam.add(p, 'camDistance', 1.2, 8, 0.05).name('distance');
   cam.add(p, 'camDrift', 0, 1, 0.01).name('drift');
 
-  for (const f of [particles, motion, beat, det, look, cam]) f.close();
+  for (const f of [particles, motion, beat, det, look, touch, cam]) f.close();
   return gui;
 }

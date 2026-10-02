@@ -8,9 +8,10 @@
   </head>
   <body>
     <canvas id="view"></canvas>
+    <div id="hint">press and hold</div>
 
-    <!-- click-to-play gate -->
-    <div id="gate">
+    <!-- source chooser (opens from the toolbar, or after a long press) -->
+    <div id="gate" hidden>
       <ag-glass variant="regular" class="gate-card">
         <h1>Ink cloud</h1>
         <p class="lede">A million ink particles breathing with the music. Pick a source, then start.</p>
@@ -19,6 +20,7 @@
         <input id="stream-url" class="text" type="url" spellcheck="false" />
         <input id="file-input" type="file" accept="audio/*" hidden />
         <ag-button id="start" variant="prominent" size="large">Start</ag-button>
+        <ag-button id="gate-close" variant="clear">Keep watching</ag-button>
         <p id="gate-error" class="error" hidden></p>
       </ag-glass>
     </div>
