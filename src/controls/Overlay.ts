@@ -44,6 +44,7 @@ export interface OverlayHandlers {
   onStart: (choice: SourceKind, extra: { url?: string; file?: File }) => Promise<void>;
   onTogglePlay: () => void;
   onToggleSettings: () => void;
+  onToggleMode: () => void;
 }
 
 export class Overlay {
@@ -77,6 +78,7 @@ export class Overlay {
     this.playBtn.addEventListener('click', () => handlers.onTogglePlay());
     document.getElementById('change-source')!.addEventListener('click', () => this.showGate());
     document.getElementById('settings')!.addEventListener('click', () => handlers.onToggleSettings());
+    document.getElementById('mode')!.addEventListener('click', () => handlers.onToggleMode());
     document.getElementById('hide')!.addEventListener('click', () => this.setHidden(true));
     window.addEventListener('keydown', (e) => {
       if (e.target instanceof HTMLInputElement) return;
@@ -85,6 +87,7 @@ export class Overlay {
         e.preventDefault();
         handlers.onTogglePlay();
       }
+      if ((e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey && !e.altKey && this.gate.hidden) handlers.onToggleMode();
       if (e.key === 'Escape') {
         if (!this.gate.hidden) this.gate.hidden = true;
         else if (this.hidden) this.setHidden(false);

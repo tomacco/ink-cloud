@@ -16,7 +16,15 @@
 
 ---
 
-**Press and hold** anywhere: the ink gathers around your finger. Keep holding for two seconds and the controls appear. From there you can pick a sound source, open the settings, or hide everything again (`H` on a keyboard, the eye button on a phone). `Space` pauses.
+**Press and hold** anywhere: the ink gathers around your finger. Keep holding for two seconds and the controls appear. From there you can pick a sound source, switch mode, open the settings, or hide everything again (`H` on a keyboard, the eye button on a phone). `Space` pauses.
+
+## Two modes
+
+<p align="center">
+  <img src="docs/strings-mode.jpg" width="640" alt="Strings mode: families of straight lines sweeping between base curves, stacking into dark edges">
+</p>
+
+**Ink** is the free cloud above. **Strings** (the grid button, or `M`) is the construction behind the *Lumen Chamber* cover: ruled surfaces. Eight base vertices sit on a jittered cube; a curve is a quadratic Bézier between two of them with a third as control point, or a single vertex. A surface pairs two curves and its strings join the points at the same parameter on both, sweeping along slowly. Where both curves collapse to a vertex every string stacks into one dark base edge; a curve paired with a vertex fans into a point. Particles spring onto their string, so the beat, the touch and the flow still move them and the surfaces breathe. Switching ink to strings morphs: particles spring onto their strings. Switching back dissolves instead: strings drift off with the flow and re-emerge from the core over a few seconds.
 
 ## Sound
 
@@ -41,12 +49,12 @@ Dots never look like ink, strokes do. Each of 4096 *emitters* in the core releas
 
 ```mermaid
 flowchart LR
-  A[Simulation<br>positions + velocities<br>in float textures] --> B[Stroke pre-pass<br>one fragment per particle:<br>screen segment, width, ink]
-  B --> C[Thin strokes<br>full-res density]
-  B --> D[Wide strokes<br>0.35x density]
-  C --> E[Composite<br>1 - exp(-density · k)<br>paper · vignette · grain]
+  A["Simulation<br/>positions + velocities<br/>in float textures"] --> B["Stroke pre-pass<br/>one fragment per particle:<br/>screen segment, width, ink"]
+  B --> C["Thin strokes<br/>full-res density"]
+  B --> D["Wide strokes<br/>0.35x density"]
+  C --> E["Composite<br/>1 - exp(-density · k)<br/>paper · vignette · grain"]
   D --> E
-  F[AnalyserNode<br>spectral flux] --> G[Beat envelope<br>attack / release]
+  F["AnalyserNode<br/>spectral flux"] --> G["Beat envelope<br/>attack / release"]
   G --> A
   G --> B
 ```
@@ -64,7 +72,7 @@ bun run dev        # http://localhost:5190
 bun run build      # dist/, deployed to GitHub Pages by the workflow
 ```
 
-Useful URL flags: `?hud=1` shows the controls at once, `?panel=1` shows them with the settings open, `?tex=512` sets the particle texture side (512² = 262k, 1024² = 1M), `?bpm=120` runs the manual clock, `?touch=0.3,0.5` holds a virtual finger, `?p.<param>=<value>` presets any tunable from `src/params.ts`, `?bench=<name>&debug=1` prints GPU pass times and beat statistics.
+Useful URL flags: `?mode=strings` starts in strings mode, `?hud=1` shows the controls at once, `?panel=1` shows them with the settings open, `?tex=512` sets the particle texture side (512² = 262k, 1024² = 1M), `?bpm=120` runs the manual clock, `?touch=0.3,0.5` holds a virtual finger, `?p.<param>=<value>` presets any tunable from `src/params.ts`, `?bench=<name>&debug=1` prints GPU pass times and beat statistics.
 
 ## Performance
 

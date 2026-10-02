@@ -84,6 +84,13 @@ export function createDebugPanel(container: HTMLElement, hooks: DebugHooks): GUI
   look.add(p, 'vignette', 0, 1, 0.01).name('vignette');
   look.add(p, 'paperWarmth', -0.05, 0.08, 0.001).name('paper warmth');
 
+  const mode = gui.addFolder('Mode');
+  mode.add(p, 'mode', { ink: 0, strings: 1 }).name('mode').listen();
+  mode.add(p, 'stringSpeed', 0, 0.2, 0.001).name('string sweep');
+  mode.add(p, 'stringDrift', 0, 0.5, 0.005).name('surface drift');
+  mode.add(p, 'stringSpring', 0.5, 20, 0.1).name('spring');
+  mode.add(p, 'linesPerSurface', [8, 16, 32, 64, 128]).name('lines / surface');
+
   const touch = gui.addFolder('Touch');
   touch.add(p, 'touchStrength', 0, 10, 0.1).name('finger pull');
   touch.add(p, 'touchHold', 0.5, 5, 0.1).name('hold to reveal (s)');
@@ -93,6 +100,6 @@ export function createDebugPanel(container: HTMLElement, hooks: DebugHooks): GUI
   cam.add(p, 'camDistance', 1.2, 8, 0.05).name('distance');
   cam.add(p, 'camDrift', 0, 1, 0.01).name('drift');
 
-  for (const f of [particles, motion, beat, det, look, touch, cam]) f.close();
+  for (const f of [particles, motion, beat, det, look, mode, touch, cam]) f.close();
   return gui;
 }
