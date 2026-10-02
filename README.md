@@ -64,7 +64,7 @@ bun run dev        # http://localhost:5190
 bun run build      # dist/, deployed to GitHub Pages by the workflow
 ```
 
-Useful URL flags: `?hud=1` shows the controls at once, `?panel=1` opens settings, `?tex=512` sets the particle texture side (512² = 262k, 1024² = 1M), `?bpm=120` runs the manual clock, `?touch=0.3,0.5` holds a virtual finger, `?p.<param>=<value>` presets any tunable from `src/params.ts`, `?bench=<name>&debug=1` prints GPU pass times and beat statistics.
+Useful URL flags: `?hud=1` shows the controls at once, `?panel=1` shows them with the settings open, `?tex=512` sets the particle texture side (512² = 262k, 1024² = 1M), `?bpm=120` runs the manual clock, `?touch=0.3,0.5` holds a virtual finger, `?p.<param>=<value>` presets any tunable from `src/params.ts`, `?bench=<name>&debug=1` prints GPU pass times and beat statistics.
 
 ## Performance
 

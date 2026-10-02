@@ -151,6 +151,7 @@ export class Overlay {
   setHidden(hidden: boolean): void {
     this.hidden = hidden;
     this.hud.classList.toggle('hidden', hidden);
+    if (!hidden) this.hint.classList.add('gone');
   }
 
   setPanelOpen(open: boolean): void {

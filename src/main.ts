@@ -214,7 +214,7 @@ let pressing = false;
 let pressStart = 0;
 let pressX = 0;
 let pressY = 0;
-let revealed = false;
+let pressId = -1; // the pointer that owns the press; other fingers are ignored
 
 function projectTouch(): void {
   ndc.set((pressX / window.innerWidth) * 2 - 1, -(pressY / window.innerHeight) * 2 + 1);
@@ -226,6 +226,8 @@ function projectTouch(): void {
 
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 && e.pointerType === 'mouse') return;
+  if (pressing) return; // a second finger must not restart the hold or move the attractor
+  pressId = e.pointerId;
   pressing = true;
   pressStart = elapsed;
   pressX = e.clientX;
@@ -234,12 +236,14 @@ canvas.addEventListener('pointerdown', (e) => {
   void audio.resume(); // first gesture unlocks the AudioContext for later
 });
 canvas.addEventListener('pointermove', (e) => {
-  if (!pressing) return;
+  if (!pressing || e.pointerId !== pressId) return;
   pressX = e.clientX;
   pressY = e.clientY;
 });
-const release = (): void => {
+const release = (e: PointerEvent): void => {
+  if (e.pointerId !== pressId) return;
   pressing = false;
+  pressId = -1;
 };
 canvas.addEventListener('pointerup', release);
 canvas.addEventListener('pointercancel', release);
@@ -257,10 +261,8 @@ function updateTouch(dt: number): void {
   touch.w += (target - touch.w) * Math.min(1, dt * 6);
   if (pressing) {
     projectTouch();
-    if (!revealed && elapsed - pressStart >= params.touchHold) {
-      revealed = true;
-      overlay.reveal();
-    }
+    // Every long press brings the controls back; this is the only way on a phone.
+    if (overlay.hidden && elapsed - pressStart >= params.touchHold) overlay.reveal();
   }
 }
 
@@ -431,10 +433,7 @@ requestAnimationFrame(frame);
 
 // ---------------------------------------------------------------------------
 // Deep links and test modes
-if (query.get('hud') === '1') {
-  revealed = true;
-  overlay.reveal();
-}
+if (query.get('hud') === '1' || panelOpen) overlay.reveal();
 if (query.get('autostart') === 'stream') {
   // Needs an autoplay-permitted browser (Chrome --autoplay-policy=no-user-gesture-required).
   void audio.useStream(query.get('url') || DEFAULT_STREAM).then(
